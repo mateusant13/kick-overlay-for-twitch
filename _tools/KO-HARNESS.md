@@ -34,8 +34,9 @@ Exit code is 0 only when every check is PASS/SKIP/WARN. A JSON report and a
 
 ## How `check` works
 
-1. Injects KO, sets a 1600×900 viewport (so Twitch chat no longer overlaps the
-   player and real clicks hit the LIVE pill).
+1. Injects KO and sets a 1600×900 viewport so the overlay/chat layout matches a
+   normal player; LIVE pill tests use a DOM click because Twitch's consent
+   dialog can cover the player.
 2. Kick: activate, pause/play, mute/unmute, quality switch, DVR seek, LIVE pill
    (DOM click - Twitch's consent dialog can cover the player and intercept a
    real click), a `seekToLive` sentinel check (`pos < 200s`, never `2^30`), and

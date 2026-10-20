@@ -1,0 +1,19 @@
+# Chrome extension dev artifacts
+_metadata/
+
+# Node
+node_modules/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local backups / temp
+backup-*/
+ko-guest*.log
+
+# Separate projects kept locally, not part of the Kick Overlay repo
+cookie-extension/
+instagram-followguard/

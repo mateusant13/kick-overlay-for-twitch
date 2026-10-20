@@ -59,6 +59,20 @@ profile at `twitch.tv/jb_sniper` + a live YouTube HLS video.
   The mapping is per-channel because YouTube handles can differ from the
   Twitch slug (this one does), so it cannot be inferred safely.
 
+## 0.8.10 (2026-10-20, Twitch PBP ad report)
+
+- [x] A live view on `twitch.tv/duda` reported an ad while the extension was
+  enabled. The page-side token rewrite was working (`lastPlayerType` showed
+  `picture-by-picture -> popout`, `rewrites=5`, `workerHooks=2`,
+  `workerFailures=0`), but the worker's fallback cleaner explicitly skipped
+  `/channel/hls/` masters whose URL contained `picture-by-picture`. Twitch's
+  2025 stream display ads use that player type, so the clean-master path was
+  bypassed.
+- [x] Removed that skip: every `/channel/hls/` master, including PBP, is now
+  replaced with a freshly minted popout master (falls back safely if the mint
+  fails). Added `stats.pbpRewrites` so a future report can be diagnosed
+  without guessing.
+
 ## Diagnostic harness (added 2026-10-20)
 
 One command now drives a clean guest profile and checks every layer:

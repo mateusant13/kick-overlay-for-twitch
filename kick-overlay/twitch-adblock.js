@@ -63,6 +63,7 @@
         v.playerType = PLAYER_TYPE;
         if (typeof v.platform === 'string') v.platform = 'web';
         stats.lastPlayerType = { before: before || '(none)', after: PLAYER_TYPE };
+        if (before === 'picture-by-picture') stats.pbpRewrites = (stats.pbpRewrites || 0) + 1;
         changed = true;
       }
       if (!changed) return body;
@@ -217,7 +218,10 @@
     self.fetch = async function (input, init) {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
       try {
-        if (typeof url === 'string' && url.includes('/channel/hls/') && !url.includes('picture-by-picture')) {
+        // Clean picture-by-picture masters too. Twitch's 2025 SDA ads can
+        // arrive on that player type; skipping them let a PBP master through
+        // even though the page token itself had been rewritten to popout.
+        if (typeof url === 'string' && url.includes('/channel/hls/')) {
           const text = await cleanMaster(url);
           if (text) {
             return new Response(text, {

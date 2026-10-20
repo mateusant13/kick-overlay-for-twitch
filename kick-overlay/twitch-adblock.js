@@ -52,9 +52,17 @@
       let changed = false;
       for (const item of items) {
         const v = item && item.variables;
-        if (!v || typeof v !== 'object' || typeof v.playerType !== 'string') continue;
+        if (!v || typeof v !== 'object') continue;
+        // Some token calls omit playerType entirely; a live/VOD request with
+        // no type must be forced to popout too, otherwise Twitch defaults to
+        // the ad-bearing site player.
+        if (typeof v.playerType !== 'string') {
+          if (v.isLive !== true || v.isVod === true) continue;
+        }
+        const before = v.playerType;
         v.playerType = PLAYER_TYPE;
         if (typeof v.platform === 'string') v.platform = 'web';
+        stats.lastPlayerType = { before: before || '(none)', after: PLAYER_TYPE };
         changed = true;
       }
       if (!changed) return body;
@@ -80,7 +88,11 @@
         } catch {
           /* never break a page request */
         }
-        return realFetch.apply(this, arguments);
+        // MUST forward the possibly-rewritten `init`. The old code used
+        // `arguments`, so the playout token body stayed ad-bearing even
+        // though stats.rewrites incremented — the exact failure that let a
+        // midroll through.
+        return realFetch.call(this, input, init);
       };
     }
   } catch {

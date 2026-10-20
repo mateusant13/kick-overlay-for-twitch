@@ -212,6 +212,8 @@ function usage() {
   set --player=kick|youtube|twitch [--yt=URL] [--enabled=1|0]
   eval "<expr>" [--world=isolated|main] [--target=page|sw|hls|ivs]
   click "<selector>" [--real]    real mouse or synthetic click
+  key ArrowLeft|ArrowRight|f     real CDP key event (overlay handler test)
+  scrolltest [--width=1600 --height=900 --y=600]   scroll-anchor regression
   shot [path]                    PNG screenshot
   net --pattern=RE --seconds=N [--target=hls|page|sw]
   console [--seconds=N]          captured errors from page/hls/sw`);
@@ -293,6 +295,43 @@ async function main() {
     if (!selector) throw new Error('click needs a selector');
     const r = await s.page.click(selector, { real: !flags.synthetic, settle: Number(flags.settle || 800) });
     console.log(JSON.stringify(r, null, 2));
+    s.cdp.close();
+    return;
+  }
+
+  if (cmd === 'key') {
+    const key = pos[1];
+    if (!key) throw new Error('key needs a key name (e.g. ArrowLeft)');
+    const vk = { ArrowLeft: 37, ArrowRight: 39, ArrowUp: 38, ArrowDown: 40, f: 70 }[key];
+    if (!vk) throw new Error(`unsupported key ${key}`);
+    const base = { key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
+    await s.page.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base }, s.page.sessionId);
+    await s.page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base }, s.page.sessionId);
+    await delay(Number(flags.wait || 1200));
+    console.log(JSON.stringify({ sent: key }, null, 2));
+    s.cdp.close();
+    return;
+  }
+
+  if (cmd === 'scrolltest') {
+    const w = Number(flags.width || 1600);
+    const hh = Number(flags.height || 900);
+    const y = Number(flags.y || 600);
+    await s.page.setViewport(w, hh);
+    await delay(800);
+    const before = await s.page.evalMain('({innerWidth,innerHeight,docH:document.documentElement.scrollHeight,bodyH:document.body.scrollHeight,scrollY,bodyOverflow:getComputedStyle(document.body).overflow})');
+    // Force a real document scroll even when Twitch's layout pins the body.
+    await s.page.evalMain(`(() => {
+      document.documentElement.style.height = '2000px';
+      document.body.style.height = '2000px';
+      document.body.style.overflow = 'auto';
+      window.scrollTo(0, ${y});
+      return true;
+    })()`);
+    await delay(1200);
+    const after = await s.page.evalIsolated('({scrollY,wrapTop:+KO.wrap.getBoundingClientRect().top.toFixed(1),anchorTop:+(twitchAnchorRect()?.top||0).toFixed(1),wrapH:+KO.wrap.getBoundingClientRect().height.toFixed(1),anchorH:+(twitchAnchorRect()?.height||0).toFixed(1),display:KO.wrap.style.display})');
+    await s.page.evalMain(`(() => { document.documentElement.style.height=''; document.body.style.height=''; document.body.style.overflow=''; window.scrollTo(0,0); return true; })()`);
+    console.log(JSON.stringify({ before, after }, null, 2));
     s.cdp.close();
     return;
   }

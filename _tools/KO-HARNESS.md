@@ -26,6 +26,8 @@ Exit code is 0 only when every check is PASS/SKIP/WARN. A JSON report and a
 | `set --player=kick\|youtube\|twitch [--yt=URL] [--enabled=0\|1]` | Write `ko.v2` storage; hot-applies. |
 | `eval "<expr>" [--world=isolated\|main] [--target=page\|hls\|ivs\|sw]` | Evaluate in the content-script world by default. |
 | `click "<selector>" [--synthetic]` | Hit-test + real `Input.dispatchMouseEvent`. |
+| `key ArrowLeft\|ArrowRight\|f` | Real CDP key event through the overlay handler. |
+| `scrolltest [--width=1600 --height=900 --y=600]` | Force document scroll and compare `#ko-wrap` top with the player anchor. |
 | `shot [path]` | 1600×900 PNG. |
 | `net --pattern=RE --seconds=N [--target=hls\|page\|sw]` | Capture request/response statuses. |
 | `console --seconds=N` | Captured exceptions / console errors. |
@@ -41,9 +43,15 @@ Exit code is 0 only when every check is PASS/SKIP/WARN. A JSON report and a
    10-second `googlevideo` segment probe (fails on 4xx/5xx), quality switch,
    pause/play/mute via the real overlay button, rewind + LIVE click.
 4. Adblock: MAIN-world `__koTwitchAdblockStats` (rewrites/hooks/failures) and
-   `data-ko-adblock`; then disables the overlay and verifies the native Twitch
-   `<video>` actually advances with the worker hook active.
+   `data-ko-adblock`; a synthetic PlaybackAccessToken probe **captures the
+   actual wire body** and asserts `playerType:"popout"` (catches the 0.8.7
+   bug where stats incremented but the original `site` body was forwarded);
+   then disables the overlay and verifies the native Twitch `<video>` actually
+   advances with the worker hook active.
 5. Captures page/HLS/IVS/SW exceptions and screenshots the final frame.
+
+Current suite: **20 checks** (20/20 PASS on 2026-10-20 at `jb_sniper` + a live
+YouTube HLS video).
 
 ## Updating the user's live install
 

@@ -2187,26 +2187,40 @@ function seekOverlayStep(delta) {
     ytCmd('seek', ct + delta);
     return;
   }
-  // kick: broadcast-timeline position of the playhead (live edge rides
-  // pos + lat, DVR pos is the seeked offset). Mirror kick.com's routing —
-  // a back-seek within 30s of the edge just goes live, farther back seeks
-  // the DVR url clamped safely around the live edge.
+  // kick: two different timelines, and mixing them was the "arrow goes to
+  // the start of the broadcast" bug.
+  //  - live url: getPosition() is relative to THIS playback session (the
+  //    live window), not to the broadcast start. `KO.kickDur` is the whole
+  //    VOD duration (hours), so a broadcast-timeline target built from
+  //    pos+lat lands near 0 on the DVR url.
+  //  - DVR url: pos is the broadcast offset, so a direct seek is correct.
+  // A 5s step must stay on the current player: seeking the live element
+  // backwards within its own seekable window is exactly a 5s rewind. The
+  // DVR url is only for real jumps (seekbar / kick.com's >30s rule).
   const st = KO.kickState || {};
-  const lat = isFinite(st.lat) && st.lat >= 0 ? st.lat : 0;
-  const base = (KO.kickOnDvr ? (st.pos || 0) : (st.pos || 0) + lat);
-  if (!KO.kickOnDvr && delta > 0) {
-    // On the LIVE url the playhead already rides the edge (pos+lat == edge),
-    // so any forward press over-shoots it. Send the cheap seekToLive
-    // directly — it is a no-op seek when already live. It must NEVER route
-    // through kickSeekTo -> kickBackToLive: on a long-running stream
-    // (kickDur ≈ pos+lat) the edge-30s clamp lets a forward press fall past
-    // the threshold and kickBackToLive/reload the live url — the 0.8.5
-    // arrow-at-the-edge reload symptom. On the live url the correct answer
-    // is always "stay live".
-    kickSend({ t: 'seekToLive' });
+  const pos = st.pos || 0;
+  if (!KO.kickOnDvr) {
+    if (delta > 0) {
+      // Forward on the live url always means "stay/return to live".
+      kickSend({ t: 'seekToLive' });
+      return;
+    }
+    const lat = isFinite(st.lat) && st.lat >= 0 ? st.lat : 0;
+    // Stay inside the live element's own buffer. Once the accumulated
+    // rewind reaches the buffer limit, IVS re-bases the player at the edge
+    // (the "arrow jumps back to the start" symptom). The live buffer held
+    // ~25s in testing; stop a step before that rather than reloading the
+    // stream. One press is 5s, so this only guards long key-repeat runs.
+    if (lat >= 25) return;
+    // session-relative rewind: the IVS bridge feeds this to p.seekTo(), and
+    // p.getPosition()/getLiveLatency() share that session timeline. Never
+    // build this from KO.kickDur (the broadcast duration) — that was the
+    // "arrow jumps to the start of the live" bug.
+    kickSend({ t: 'seek', s: Math.max(0, pos + delta) });
     return;
   }
-  kickSeekTo(base + delta);
+  // DVR url: already loaded, so seek it directly instead of reloading it.
+  kickSend({ t: 'seek', s: Math.max(0, pos + delta) });
 }
 
 // Shared dispatch for an overlay key, whether it arrived from the page
@@ -2287,8 +2301,32 @@ function startWatchers() {
   document.addEventListener('keydown', onOverlayKeydown, true);
 }
 
+// The 400ms geometry tick alone makes a position:fixed overlay lag behind
+// scrolling (it visibly "sticks" for up to RECT_MS). Re-run the same rect
+// pass on the next animation frame after any scroll/resize; passive capture
+// also catches Twitch's nested scroll containers.
+function bindRectScroll() {
+  if (KO.rectScrollBound) return;
+  KO.rectScrollBound = true;
+  const kick = () => {
+    if (KO.rectScrollRaf) return;
+    KO.rectScrollRaf = requestAnimationFrame(() => {
+      KO.rectScrollRaf = 0;
+      if (!KO.wrap || KO.player === 'twitch') return;
+      try {
+        rectTick();
+      } catch {
+        /* passive listener must never throw */
+      }
+    });
+  };
+  window.addEventListener('scroll', kick, { passive: true, capture: true });
+  window.addEventListener('resize', kick, { passive: true });
+}
+
 function startRectLoop() {
   stopRectLoop();
+  bindRectScroll();
   KO.rectTimer = setInterval(() => {
     try {
       rectTick();
@@ -2352,18 +2390,16 @@ function rectTick() {
       if (pr) {
         const prev = KO.lastRect;
         const r = pr;
-        const vw = window.innerWidth || 0;
-        const vh = window.innerHeight || 0;
-        let left = r.left;
-        let top = r.top;
-        let width = r.width;
-        let height = r.height;
-        if (vw > 0 && vh > 0) {
-          left = Math.max(0, Math.min(left, vw - 1));
-          top = Math.max(0, Math.min(top, vh - 1));
-          width = Math.min(width, vw - left);
-          height = Math.min(height, vh - top);
-        }
+        // Do NOT clamp left/top to the viewport. This is a position:fixed
+        // layer that mirrors the player's viewport rect: when the user
+        // scrolls the player off-screen, top/left MUST go negative so the
+        // overlay scrolls away with it. Clamping to 0 pinned the overlay to
+        // the top of the viewport ("sticky overlay" bug). Width/height also
+        // stay the player's real size; the browser clips at the viewport.
+        const left = r.left;
+        const top = r.top;
+        const width = r.width;
+        const height = r.height;
         KO.lastRect = { left, top, width, height };
         const s = KO.wrap.style;
         s.left = `${left}px`;

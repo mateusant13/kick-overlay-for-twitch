@@ -9,9 +9,33 @@
 - [x] 7. Test rodil on Twitch: Kick layer, YouTube layer, native Twitch adblock
 - [x] 8. Backup + sync to vendor KO + reinstall/update extension
   - backup: `G:\Temp\opencode\backup-20261020-015708-ko-final`
-  - vendor synced (hashes match); persistent profile reloaded 0.8.6 -> 0.8.7
+  - vendor synced (hashes match); persistent profile reloaded 0.8.6 -> 0.8.8
     via a hidden extension page (`_tools/ko-reload-persistent.mjs`), no window,
     tab, or Chrome restart.
+
+## 0.8.8 (2026-10-20, live jb_sniper test)
+
+- [x] Twitch adblock fetch rewrite actually forwards the modified body.
+  `stats.rewrites` used to increment while `realFetch.apply(this, arguments)`
+  sent the original `playerType:"site"` token — the page kept minting
+  ad-bearing playback. New `ko-harness-check` step **adblock.token-body**
+  captures the wire request and asserts `playerType:"popout"` (20/20 suite).
+- [x] Arrow-left on the Kick live player is a real 5s step. It used the
+  broadcast duration (`KO.kickDur`) as the seek base while `pos` is
+  session-relative, which targeted ~0s; now it sends `pos + delta` to the IVS
+  bridge. The bridge uses `p.seekTo()` (not `video.currentTime`), retries a
+  dropped first seek, cancels a stale retry on `seekToLive`, and the content
+  caps accumulated rewind at 25s instead of reloading the live url.
+- [x] Overlay no longer sticks to the viewport when the page scrolls: the
+  400ms rect tick no longer clamps `left/top` to 0; `bindRectScroll()` updates
+  on rAF scroll/resize. `scrolltest` confirms wrapTop == anchorTop == -550 at
+  scrollY 600.
+- [x] Manifest display name is **Kick & YouTube Overlay for Twitch**; version
+  0.8.8. Persistent install verified 0.8.8 with the fixed scripts.
+
+Harness additions in this round: `key ArrowLeft|ArrowRight|f`,
+`scrolltest`, and `adblock.token-body`. Full suite: **20/20 PASS** on a fresh
+profile at `twitch.tv/jb_sniper` + a live YouTube HLS video.
 
 ## Diagnostic harness (added 2026-10-20)
 

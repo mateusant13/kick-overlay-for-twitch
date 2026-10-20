@@ -266,6 +266,44 @@ export async function runCheck(s, opts = {}) {
     return `rewrites=${a.stats.rewrites} hooks=${a.stats.workerHooks} failures=${a.stats.workerFailures}`;
   });
 
+  await step('adblock.token-body', async () => {
+    // Regression for the 0.8.7 bug where the fetch wrapper incremented
+    // stats.rewrites but forwarded `arguments` (the original ad-bearing
+    // body), so the page still minted a `site` token and ads leaked.
+    const bodies = [];
+    const onReq = (p, sid) => {
+      if (sid !== s.page.sessionId) return;
+      if (p.request.url.includes('gql.twitch.tv/gql') &&
+          p.request.postData && p.request.postData.includes('ko_probe_')) {
+        bodies.push(p.request.postData);
+      }
+    };
+    s.cdp.on('Network.requestWillBeSent', onReq);
+    await s.page.cdp.send('Network.enable', {}, s.page.sessionId);
+    const login = `ko_probe_${Date.now()}`;
+    await s.page.evalMain(`fetch('https://gql.twitch.tv/gql', {
+      method: 'POST',
+      headers: { 'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko', 'Content-Type': 'text/plain;charset=UTF-8' },
+      body: JSON.stringify({
+        operationName: 'PlaybackAccessToken',
+        variables: { isLive: true, login: ${JSON.stringify(login)}, isVod: false, vodID: '', playerType: 'site', platform: 'web' },
+        extensions: { persistedQuery: { version: 1, sha256Hash: 'ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9' } }
+      })
+    }).catch(() => null)`);
+    await delay(1800);
+    if (!bodies.length) throw new Error('probe token request was not sent');
+    let sent = null;
+    for (const b of bodies) {
+      try {
+        const j = JSON.parse(b);
+        const item = Array.isArray(j) ? j[0] : j;
+        if (item?.variables?.login === login) sent = item.variables.playerType;
+      } catch { /* ignore */ }
+    }
+    if (sent !== 'popout') throw new Error(`wire playerType=${sent}`);
+    return `wire playerType=${sent}`;
+  });
+
   if (opts.adblock !== false) {
     await step('adblock.native-twitch', async () => {
       await s.page.evalIsolated(`new Promise((res) => {

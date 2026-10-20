@@ -255,7 +255,8 @@ if (HLS_MODE) {
 // A position to apply once the next load() completes (kick-style rewind:
 // switch to the DVR url, then seek within the loaded broadcast).
 let pendingSeek = null;
-let pendingTries = 0; // seek retry budget (1/s) — give up instead of looping
+let pendingTries = 0; // seek retry budget (1/s) - give up instead of looping
+let seekGen = 0;      // cancels a stale retry when a newer seek/live wins
 
 function sendSt() {
   let q = null;
@@ -345,6 +346,7 @@ window.addEventListener('message', (ev) => {
   switch (m.t) {
     case 'load':
       try {
+        seekGen++;
         pendingSeek = null;
         p.load(m.url);
         if (Number.isFinite(m.seekTo) && m.seekTo > 0 && m.seekTo < 1e15) {
@@ -368,7 +370,47 @@ window.addEventListener('message', (ev) => {
     case 'volume':
       try { p.setVolume(m.v); } catch (e) { /* ignore */ }
       break;
+    case 'seek':
+      // IVS owns its own clock: writing video.currentTime (the HLS bridge's
+      // path) is ignored/re-based on a live element, which is why a 5s
+      // rewind looked like a forward jump. getPosition()/seekTo() are the
+      // player's own timeline, so a relative arrow step lands correctly.
+      try {
+        if (Number.isFinite(m.s) && m.s >= 0 && m.s < 1e15) {
+          const cur = p.getPosition() || 0;
+          const lat = p.getLiveLatency();
+          const edge = cur + (isFinite(lat) && lat > 0 ? lat : 0);
+          const target = Math.max(0, Math.min(m.s, edge - 0.25));
+          // IVS drops a seekTo issued while the live buffer is still
+          // attaching (observed: first ArrowLeft after a fresh load did
+          // nothing, second landed). Retry only when the player clearly did
+          // not move: position reached/approached the target, or a live
+          // rewind raised the latency. Same-target retries are harmless.
+          const beforeLat = isFinite(lat) ? lat : 0;
+          const gen = ++seekGen;
+          let tries = 0;
+          const attempt = () => {
+            if (gen !== seekGen) return; // a newer seek/live owns the player
+            try { p.seekTo(target); p.play(); } catch { /* not ready */ }
+            tries++;
+            if (tries >= 3) return;
+            setTimeout(() => {
+              if (gen !== seekGen) return;
+              try {
+                const nowPos = p.getPosition() || 0;
+                const nowLat = p.getLiveLatency();
+                const ok = Math.abs(nowPos - target) < 3 ||
+                  (isFinite(nowLat) && nowLat > beforeLat + 2);
+                if (!ok) attempt();
+              } catch { attempt(); }
+            }, 450);
+          };
+          attempt();
+        }
+      } catch (e) { /* ignore */ }
+      break;
     case 'seekToLive':
+      seekGen++; // a pending ArrowLeft retry must not pull us back again
       try {
         // getPosition() + getLiveLatency() is the safe pair. Do NOT seek to
         // the media element's seekable.end: IVS reports a sentinel ~2^30 on

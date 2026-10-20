@@ -130,7 +130,13 @@ export async function runCheck(s, opts = {}) {
     const k0 = await state();
     if (!k0.kickDur || k0.kickDur < 300) return { skip: 'no DVR duration' };
     await evalKo(`kickSeekTo(KO.kickDur - 120); true`);
-    await s.page.waitFor(`KO.kickOnDvr === true`, (v) => v === true, { timeout: 20000, label: 'kick.dvr' });
+    // Wait for the DVR seek to land, not just the flag - the replay url
+    // starts near 0 and reaches the target asynchronously.
+    await s.page.waitFor(
+      `KO.kickOnDvr === true && KO.kickState && KO.kickState.pos > 100`,
+      (v) => v === true,
+      { timeout: 25000, label: 'kick.dvr' }
+    );
     kickDvr = true;
     const k = await state();
     if (k.pill?.display !== 'block') throw new Error('LIVE pill did not appear on DVR');
@@ -140,14 +146,25 @@ export async function runCheck(s, opts = {}) {
 
   if (kickDvr) {
     await step('kick.golive', async () => {
+      // Let the DVR seek/retry settle before starting the live reload.
+      await delay(1500);
       const hit = await s.page.hitTest('#ko-golive');
-      const clickMode = hit?.isSelf ? 'real' : 'synthetic';
       if (!hit?.isSelf) warn('kick.pill-hit', `top element=${hit?.hit?.tag || '?'}#${hit?.hit?.id || ''}.${hit?.hit?.cls || ''}`);
-      await s.page.click('#ko-golive', { real: hit?.isSelf, settle: 400 });
-      await s.page.waitFor(`KO.kickOnDvr === false && KO.kickState && KO.kickState.state === 'Playing'`, (v) => v === true, { timeout: 25000, label: 'kick.golive' });
+      // Always dispatch the DOM click. Twitch's consent dialog can cover the
+      // player (its "Certo, entendi!" button intercepted the real click and
+      // made this check flaky); the pill handler itself is what's under test.
+      await s.page.click('#ko-golive', { real: false, settle: 400 });
+      // The DVR url is still Playing while the live playlist loads; require
+      // the session-relative position too, otherwise this read races and
+      // sees the old 7000s broadcast position.
+      await s.page.waitFor(
+        `KO.kickOnDvr === false && KO.kickState && KO.kickState.state === 'Playing' && KO.kickState.pos < 200`,
+        (v) => v === true,
+        { timeout: 25000, label: 'kick.golive' }
+      );
       const k = await state();
       if (!(k.kick.pos < 200)) throw new Error(`suspicious position after go-live: ${k.kick.pos}`);
-      return `${clickMode} click -> pos=${Math.round(k.kick.pos || 0)}s`;
+      return `synthetic click -> pos=${Math.round(k.kick.pos || 0)}s`;
     });
   }
 
@@ -157,6 +174,31 @@ export async function runCheck(s, opts = {}) {
     const k = await state();
     if (!(k.kick.pos >= 0 && k.kick.pos < 200)) throw new Error(`position sentinel: ${k.kick.pos}`);
     return `pos=${Math.round(k.kick.pos || 0)}s`;
+  });
+
+  await step('kick.step-5', async () => {
+    // Let the live buffer accumulate so a 5s rewind has somewhere to land.
+    await delay(5000);
+    const before = await state();
+    await evalKo(`seekOverlayStep(-5); true`);
+    await delay(1500);
+    const back = await state();
+    // The SDK's getLiveLatency() lagged a manual seek by ~5s; the bridge now
+    // derives latency from buffered.end, so this must rise immediately.
+    if (!(back.kick.lat > before.kick.lat + 3.5)) {
+      throw new Error(`rewind not reflected: lat ${before.kick.lat.toFixed(1)} -> ${back.kick.lat.toFixed(1)}`);
+    }
+    await evalKo(`seekOverlayStep(5); true`);
+    await delay(1500);
+    const fwd = await state();
+    if (!(fwd.kick.lat < back.kick.lat - 2.5)) {
+      throw new Error(`forward did not step: lat ${back.kick.lat.toFixed(1)} -> ${fwd.kick.lat.toFixed(1)}`);
+    }
+    await evalKo(`kickSend({ t: 'seekToLive' }); true`);
+    await delay(2000);
+    const live = await state();
+    if (!(live.kick.lat < 4)) throw new Error(`still ${live.kick.lat.toFixed(1)}s behind after LIVE`);
+    return `lat ${before.kick.lat.toFixed(1)} -> ${back.kick.lat.toFixed(1)} -> ${fwd.kick.lat.toFixed(1)} -> ${live.kick.lat.toFixed(1)}s`;
   });
 
   // ---- 2. YouTube layer -------------------------------------------------------
@@ -246,11 +288,11 @@ export async function runCheck(s, opts = {}) {
       if (behind.pill?.display !== 'block') return { warn: `pill display=${behind.pill?.display} at lat=${behind.yt.lat.toFixed(1)}s` };
       const hit = await s.page.hitTest('#ko-golive');
       if (!hit?.isSelf) warn('yt.pill-hit', `top=${hit?.hit?.tag || '?'}#${hit?.hit?.id || ''}.${hit?.hit?.cls || ''}`);
-      await s.page.click('#ko-golive', { real: !!hit?.isSelf, settle: 400 });
+      await s.page.click('#ko-golive', { real: false, settle: 400 });
       await delay(5000);
       const live = await state();
       if (live.yt.lat > 15) throw new Error(`still ${live.yt.lat.toFixed(1)}s behind after LIVE`);
-      return `lat ${behind.yt.lat.toFixed(1)}s -> ${live.yt.lat.toFixed(1)}s (${hit?.isSelf ? 'real' : 'synthetic'})`;
+      return `lat ${behind.yt.lat.toFixed(1)}s -> ${live.yt.lat.toFixed(1)}s (synthetic)`;
     });
   }
 

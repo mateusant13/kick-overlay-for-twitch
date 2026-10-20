@@ -2199,13 +2199,18 @@ function seekOverlayStep(delta) {
   // DVR url is only for real jumps (seekbar / kick.com's >30s rule).
   const st = KO.kickState || {};
   const pos = st.pos || 0;
+  const lat = isFinite(st.lat) && st.lat >= 0 ? st.lat : 0;
   if (!KO.kickOnDvr) {
     if (delta > 0) {
-      // Forward on the live url always means "stay/return to live".
-      kickSend({ t: 'seekToLive' });
+      // Behind live, ArrowRight advances one step — same as YouTube. Only
+      // when already within a step of the edge does it mean "go live".
+      if (lat > ARROW_SEEK_SEC + 1) {
+        kickSend({ t: 'seek', s: pos + delta });
+      } else {
+        kickSend({ t: 'seekToLive' });
+      }
       return;
     }
-    const lat = isFinite(st.lat) && st.lat >= 0 ? st.lat : 0;
     // Stay inside the live element's own buffer. Once the accumulated
     // rewind reaches the buffer limit, IVS re-bases the player at the edge
     // (the "arrow jumps back to the start" symptom). The live buffer held

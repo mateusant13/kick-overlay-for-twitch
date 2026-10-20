@@ -293,11 +293,31 @@ function sendSt() {
     /* not ready */
   }
   if (!isFinite(pos) || pos < 0 || pos >= 1e15) pos = 0;
+  // getLiveLatency() is the SDK's smoothed latency and does NOT update
+  // immediately after a manual seek (measured: pos dropped 5s at t=0, lat
+  // still read 1.5s until t≈5s). The buffered range end is the real newest
+  // live frame and moves with the seek instantly, so the bar/pill and the
+  // seekToLive target use `buffered.end - pos`. On the DVR/VOD url there is
+  // no live edge: the player can buffer far ahead, which made this formula
+  // report 30s+ "latency" and label the replay "LIVE -38s". A finite
+  // duration identifies that url, where latency is meaningless (0). Live
+  // streams report Infinity here (JSON turns that into null), so the
+  // isFinite check must come before deciding "this is VOD".
   let lat = 0;
-  try {
-    lat = p.getLiveLatency();
-  } catch {
-    /* not ready */
+  if (!(isFinite(dur) && dur > 0)) {
+    try {
+      const b = p.getBuffered();
+      if (b && isFinite(b.end) && isFinite(pos)) lat = Math.max(0, b.end - pos);
+    } catch {
+      /* not ready */
+    }
+    if (!(lat > 0)) {
+      try {
+        lat = p.getLiveLatency();
+      } catch {
+        /* not ready */
+      }
+    }
   }
   if (!isFinite(lat)) lat = 0;
   if (!isFinite(dur) || dur < 0 || dur >= 1e15) dur = 0;
@@ -378,15 +398,22 @@ window.addEventListener('message', (ev) => {
       try {
         if (Number.isFinite(m.s) && m.s >= 0 && m.s < 1e15) {
           const cur = p.getPosition() || 0;
-          const lat = p.getLiveLatency();
-          const edge = cur + (isFinite(lat) && lat > 0 ? lat : 0);
-          const target = Math.max(0, Math.min(m.s, edge - 0.25));
+          let edge = 0;
+          try {
+            const b = p.getBuffered();
+            if (b && isFinite(b.end)) edge = b.end;
+          } catch { /* not ready */ }
+          if (!(edge > 0)) {
+            const lat = p.getLiveLatency();
+            edge = cur + (isFinite(lat) && lat > 0 ? lat : 0);
+          }
+          const target = Math.max(0, Math.min(m.s, Math.max(0, edge - 0.25)));
           // IVS drops a seekTo issued while the live buffer is still
           // attaching (observed: first ArrowLeft after a fresh load did
           // nothing, second landed). Retry only when the player clearly did
           // not move: position reached/approached the target, or a live
           // rewind raised the latency. Same-target retries are harmless.
-          const beforeLat = isFinite(lat) ? lat : 0;
+          const beforeLat = Math.max(0, edge - cur);
           const gen = ++seekGen;
           let tries = 0;
           const attempt = () => {
@@ -398,9 +425,12 @@ window.addEventListener('message', (ev) => {
               if (gen !== seekGen) return;
               try {
                 const nowPos = p.getPosition() || 0;
-                const nowLat = p.getLiveLatency();
-                const ok = Math.abs(nowPos - target) < 3 ||
-                  (isFinite(nowLat) && nowLat > beforeLat + 2);
+                let nowLat = 0;
+                try {
+                  const b = p.getBuffered();
+                  if (b && isFinite(b.end)) nowLat = Math.max(0, b.end - nowPos);
+                } catch { /* not ready */ }
+                const ok = Math.abs(nowPos - target) < 3 || nowLat > beforeLat + 2;
                 if (!ok) attempt();
               } catch { attempt(); }
             }, 450);
@@ -412,25 +442,25 @@ window.addEventListener('message', (ev) => {
     case 'seekToLive':
       seekGen++; // a pending ArrowLeft retry must not pull us back again
       try {
-        // getPosition() + getLiveLatency() is the safe pair. Do NOT seek to
-        // the media element's seekable.end: IVS reports a sentinel ~2^30 on
-        // a live edge, and seeking there froze the player. Only use seekable
-        // as a fallback when latency is unavailable AND the end is within a
-        // sane distance of the current position.
+        // The newest actually-buffered frame is the live edge. getLiveLatency()
+        // lags a manual rewind by several seconds, so `pos + getLiveLatency()`
+        // used to "go live" to a point only just ahead of the rewound playhead.
+        // Buffered end tracks the edge immediately and shares getPosition()'s
+        // timeline. Do NOT use the media element's seekable.end: IVS reports a
+        // sentinel ~2^30 on a live edge and seeking there froze the player.
         const cur = p.getPosition() || 0;
-        const lat = p.getLiveLatency();
         let target = 0;
-        if (isFinite(lat) && lat > 0) target = cur + lat;
-        if (!(target > 0)) {
+        try {
+          const b = p.getBuffered();
+          if (b && isFinite(b.end) && b.end > 0) target = b.end - 0.25;
+        } catch { /* not ready */ }
+        if (!(target > cur)) {
           try {
-            const ve = p.getHTMLVideoElement();
-            if (ve && ve.seekable && ve.seekable.length) {
-              const end = ve.seekable.end(ve.seekable.length - 1);
-              if (isFinite(end) && end > cur && end - cur < 3600) target = end - 0.25;
-            }
+            const lat = p.getLiveLatency();
+            if (isFinite(lat) && lat > 0) target = cur + lat;
           } catch { /* not ready */ }
         }
-        if (target > 0) p.seekTo(target);
+        if (target > 0 && target > cur + 0.5) p.seekTo(target);
         p.play(); // already at the edge, or start the seek immediately
       } catch (e) { /* ignore */ }
       break;

@@ -37,6 +37,28 @@ Harness additions in this round: `key ArrowLeft|ArrowRight|f`,
 `scrolltest`, and `adblock.token-body`. Full suite: **20/20 PASS** on a fresh
 profile at `twitch.tv/jb_sniper` + a live YouTube HLS video.
 
+## 0.8.9 (2026-10-20, live jb_sniper test)
+
+- [x] Kick 5s steps were directionally wrong because the IVS bridge reported
+  `getLiveLatency()`, which does **not** update after `seekTo()` for ~5s.
+  Measured: the playhead dropped 5s instantly while latency still read 1.5s,
+  so the UI stayed on LIVE and `seekToLive()` targeted only 1.5s ahead.
+  The bridge now derives latency from `getBuffered().end - getPosition()`
+  (updates immediately) and falls back to `getLiveLatency()` only if the
+  buffered range is unavailable. On the DVR url latency is forced to 0 (the
+  replay buffers far ahead, which had shown `LIVE -38s`), keyed on a **finite**
+  duration - live IVS reports `Infinity`, not 0, and that distinction matters.
+- [x] ArrowRight while behind live is now a real +5s step instead of always
+  jumping to live; it only goes live when within one step of the edge.
+  `seekToLive()` targets the buffered edge (not `pos + stale latency`).
+  Verified: 0.98s -> 6.78s -> 13.06s -> 9.10s -> 4.97s -> 1.11s.
+- [x] Harness check `kick.step-5` added (21 checks).
+- [x] YouTube on Twitch mapping verified with `jb_sniper -> @JBSniperPRIME`:
+  resolved channel `UCPnSTVabEHxpiIScMrD_47w`, minted live HLS, `ko-yt`
+  visible and playing; ArrowLeft/Right moved roughly 5s per press.
+  The mapping is per-channel because YouTube handles can differ from the
+  Twitch slug (this one does), so it cannot be inferred safely.
+
 ## Diagnostic harness (added 2026-10-20)
 
 One command now drives a clean guest profile and checks every layer:

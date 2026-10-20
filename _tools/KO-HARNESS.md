@@ -37,8 +37,10 @@ Exit code is 0 only when every check is PASS/SKIP/WARN. A JSON report and a
 1. Injects KO, sets a 1600×900 viewport (so Twitch chat no longer overlaps the
    player and real clicks hit the LIVE pill).
 2. Kick: activate, pause/play, mute/unmute, quality switch, DVR seek, LIVE pill
-   pointer-events + real click, and a `seekToLive` sentinel check (`pos < 200s`,
-   never `2^30`).
+   (DOM click - Twitch's consent dialog can cover the player and intercept a
+   real click), a `seekToLive` sentinel check (`pos < 200s`, never `2^30`), and
+   a `kick.step-5` check: ArrowLeft must raise latency immediately, ArrowRight
+   must step back toward live, and LIVE must reach the edge.
 3. YouTube: mapping hot-apply, resolve live id, HLS iframe `readyState`/buffered,
    10-second `googlevideo` segment probe (fails on 4xx/5xx), quality switch,
    pause/play/mute via the real overlay button, rewind + LIVE click.
@@ -50,7 +52,7 @@ Exit code is 0 only when every check is PASS/SKIP/WARN. A JSON report and a
    advances with the worker hook active.
 5. Captures page/HLS/IVS/SW exceptions and screenshots the final frame.
 
-Current suite: **20 checks** (20/20 PASS on 2026-10-20 at `jb_sniper` + a live
+Current suite: **21 checks** (21/21 PASS on 2026-10-20 at `jb_sniper` + a live
 YouTube HLS video).
 
 ## Updating the user's live install

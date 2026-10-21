@@ -135,6 +135,41 @@ Full evidence and next steps: `kick-overlay/ADBLOCK-FINDINGS.md`.
 - [ ] HD clean source during ads (see `ADBLOCK-HD-RESEARCH.md`); current
   reliable source is 360p.
 
+## 0.8.16 (2026-10-21, real ad on `necros`)
+
+- [x] Reproduced the remaining leak: the overlay's own clean `site/web` source
+  turned ad-only on a later playlist refresh (`DCM|...` / `Amazon|...`), so
+  hiding the native player only exposed the ad inside the overlay.
+- [x] `player-bridge.js` now installs an hls.js `pLoader` that strips Twitch
+  stitched ad segments from every `*.ttvnw.net` media playlist **before**
+  hls.js parses it. It caches the last clean live window for ad-only refreshes
+  and never touches YouTube HLS.
+- [x] Parent stats: `adStrips`, `adStripErrors`, `lastAdStrip`.
+- [ ] Verify on the next real `necros` ad: `adStrips > 0`, overlay stays on
+  content (or freezes on the last clean frame), then `stops=1` after two clean
+  playlists.
+- [ ] Commit/push 0.8.16 after the real-ad check.
+
+## 0.8.17 (2026-10-21, follow-up to the same `necros` ad)
+
+- [x] 0.8.16 stopped the ad but left hls.js `Buffering rs=0 ns=2 buffered=0`
+  for ~40s on an ad-only refresh; the overlay hit its 60s timeout and was
+  removed (`stops=2`, reason `timeout`).
+- [x] `player-bridge.js` posts an `ad-only` event when the stripped playlist
+  has no content. The page asks the worker for another source; the worker
+  probes `autoplay/android` first (clean during SSAI, 360p, plays in hls.js),
+  then the other types, and recreates the overlay iframe.
+- [x] First real test: `adOnly=1`, `bypass.switch` found `autoplay/android`
+  clean and the overlay eventually played 360p content (no ad). But the old
+  `loadSource` path stayed `Buffering` ~45s, and the 60s timeout removed the
+  overlay while the ad pod was still running (`stops=1`, reason `timeout`).
+  Fixed by recreating the iframe on switch and raising the safety timeout to
+  180s.
+- [ ] Verify the final switch on the next real ad with the tab visible:
+  `adOnly` increments, `bypass.switch` appears, overlay returns to `Playing`
+  quickly, and `stops` happens only after two clean native playlists.
+- [ ] Commit/push 0.8.17 after the real-ad check.
+
 ## Diagnostic harness (added 2026-10-20)
 
 One command now drives a clean guest profile and checks every layer:

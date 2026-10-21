@@ -280,7 +280,7 @@
     }
   }
 
-  function startAdOverlay(url, channel) {
+  function startAdOverlay(url, channel, switchSource = false) {
     if (!url) return;
     if (document.documentElement.getAttribute('data-ko-adblock') === '0') {
       stopAdOverlay('disabled');
@@ -292,20 +292,43 @@
       if (!overlay.extTimer) {
         overlay.extTimer = setTimeout(() => {
           overlay.extTimer = 0;
-          startAdOverlay(url, channel);
+          startAdOverlay(url, channel, switchSource);
         }, 400);
       }
       return;
     }
     if (overlay.frame) {
-      // A second ad event with a fresher URL: reload the same frame and cancel
-      // any pending ad-end grace timer from the previous pod.
-      try { clearTimeout(overlay.adEndTimer); } catch { /* ignore */ }
-      overlay.adEndTimer = 0;
-      overlay.adEndTries = 0;
-      overlay.url = url;
-      overlaySend({ t: 'load', url });
-      return;
+      if (switchSource) {
+        // 0.8.17: the old hls.js instance can stay stuck in Buffering after an
+        // ad-only playlist (measured on necros). Tear the iframe down and
+        // build a fresh one for the replacement source; this resets the
+        // MediaSource instead of calling loadSource on a wedged instance.
+        try { clearTimeout(overlay.timeoutTimer); } catch { /* ignore */ }
+        try { clearInterval(overlay.positionTimer); } catch { /* ignore */ }
+        try { clearTimeout(overlay.adEndTimer); } catch { /* ignore */ }
+        if (overlay.onMessage) {
+          try { window.removeEventListener('message', overlay.onMessage); } catch { /* ignore */ }
+        }
+        try { overlay.frame.remove(); } catch { /* ignore */ }
+        overlay.frame = null;
+        overlay.onMessage = null;
+        overlay.ready = false;
+      } else {
+        // A second ad event with a fresher URL: reload the same frame and
+        // cancel any pending ad-end grace timer from the previous pod.
+        try { clearTimeout(overlay.adEndTimer); } catch { /* ignore */ }
+        overlay.adEndTimer = 0;
+        overlay.adEndTries = 0;
+        overlay.autoplayRetry = false;
+        overlay.startedAt = Date.now();
+        // A long ad pod can outlast 60s; the worker's two-clean-playlist
+        // `ad-end` is the normal stop, this is only a safety net.
+        try { clearTimeout(overlay.timeoutTimer); } catch { /* ignore */ }
+        overlay.timeoutTimer = setTimeout(() => stopAdOverlay('timeout'), 180 * 1000);
+        overlay.url = url;
+        overlaySend({ t: 'load', url });
+        return;
+      }
     }
     const v = mainVideo();
     if (!v) return;
@@ -362,6 +385,29 @@
         if (m.fatal) bypassStats.errors++;
         return;
       }
+      if (m.t === 'ev' && m.e === 'adstrip') {
+        bypassStats.adStrips = (bypassStats.adStrips || 0) + 1;
+        bypassStats.lastAdStrip = { d: m.d, at: Date.now() };
+        return;
+      }
+      if (m.t === 'ev' && m.e === 'adstrip-error') {
+        bypassStats.adStripErrors = (bypassStats.adStripErrors || 0) + 1;
+        bypassStats.lastAdStripError = { d: m.d, at: Date.now() };
+        return;
+      }
+      if (m.t === 'ev' && m.e === 'ad-only') {
+        // The overlay's current token type went ad-only. Ask the worker to
+        // probe another type; its ad-start rebuilds this iframe with a clean
+        // master instead of leaving hls.js in Buffering.
+        bypassStats.adOnly = (bypassStats.adOnly || 0) + 1;
+        bypassStats.lastAdOnly = { d: m.d, at: Date.now() };
+        try {
+          bypassChannel?.postMessage({ type: 'need-source', page: pageId, channel: overlay.channel || null });
+        } catch {
+          /* overlay is optional */
+        }
+        return;
+      }
       if (m.t === 'ev' && m.e === 'error') {
         bypassStats.errors++;
         stopAdOverlay('player-error');
@@ -387,8 +433,9 @@
     positionOverlay();
     overlay.positionTimer = setInterval(positionOverlay, 500);
     // Safety net if Twitch stops requesting playlists while its <video> is
-    // hidden; a normal preroll/midroll is well under a minute.
-    overlay.timeoutTimer = setTimeout(() => stopAdOverlay('timeout'), 60 * 1000);
+    // hidden. Long ad pods are common; the two-clean-playlist `ad-end` is the
+    // normal stop, this only guards a stuck overlay.
+    overlay.timeoutTimer = setTimeout(() => stopAdOverlay('timeout'), 180 * 1000);
     bypassStats.starts++;
     bypassStats.last = { type: 'start', channel: overlay.channel, at: Date.now() };
     // The bridge may already be listening; the 'ready' handler covers a slow
@@ -427,7 +474,7 @@
         return;
       }
       if (msg.type === 'ad-start') {
-        startAdOverlay(msg.url, msg.channel);
+        startAdOverlay(msg.url, msg.channel, !!msg.switch);
         return;
       }
       if (msg.type === 'ad-end') {
@@ -585,6 +632,8 @@
           adBypassActive = false;
           cleanPlaylistStreak = 0;
           debugLog('bypass.overlayStop', { reason: String(msg.reason || '').slice(0, 60) });
+        } else if (msg.type === 'need-source' && adBypassActive) {
+          switchCleanSource(msg.channel || lastChannel);
         }
       };
     }
@@ -710,17 +759,26 @@
     // autoplay/android is the measured clean type during a preroll; its 360p
     // MSE is playable by hls.js (the web player's own MSE rejects it). Keep
     // the list short: this runs during a live ad and delays the overlay.
-    async function findCleanHlsUrl(channel) {
+    async function findCleanHlsUrl(channel, preferFallback = false) {
       // Prefer the web container (HD) and fall back to autoplay/android
       // (clean during the measured preroll, but only 160p/360p). Probe one
       // video rendition per type: this runs while the ad is on screen, so
       // latency matters more than exhaustive coverage.
-      const types = [
-        ['site', 'web'],
-        ['popout', 'web'],
-        ['mobile', 'android'],
-        ['autoplay', 'android'],
-      ];
+      // On a mid-overlay source switch, start with autoplay/android: it was
+      // the type that stayed clean while the web types served SSAI ads.
+      const types = preferFallback
+        ? [
+            ['autoplay', 'android'],
+            ['mobile', 'android'],
+            ['site', 'web'],
+            ['popout', 'web'],
+          ]
+        : [
+            ['site', 'web'],
+            ['popout', 'web'],
+            ['mobile', 'android'],
+            ['autoplay', 'android'],
+          ];
       for (const [playerType, platform] of types) {
         try {
           const url = await mintMasterUrl(channel, playerType, platform);
@@ -761,6 +819,33 @@
     let bypassBusy = false;
     let lastBypassAt = 0;
     let cleanPlaylistStreak = 0;
+    let switchBusy = false;
+    let lastSwitchAt = 0;
+
+    // The overlay's current source went ad-only mid-pod. Probe the types that
+    // are known to stay clean during SSAI (autoplay/android first) and post a
+    // fresh ad-start; the page rebuilds the hls.js iframe with it.
+    async function switchCleanSource(channel) {
+      if (bypassBusy || switchBusy) return;
+      if (Date.now() - lastSwitchAt < 4000) return;
+      switchBusy = true;
+      lastSwitchAt = Date.now();
+      try {
+        const url = await findCleanHlsUrl(channel || lastChannel, true);
+        if (url && adBypassActive) {
+          debugLog('bypass.switch', { channel: channel || lastChannel });
+          postBypass({ type: 'ad-start', channel: lastChannel, url, switch: true });
+        } else if (!adBypassActive) {
+          debugLog('bypass.switchAborted', { channel: channel || lastChannel });
+        } else {
+          debugLog('bypass.switchFail', { channel: channel || lastChannel });
+        }
+      } catch (e) {
+        debugLog('bypass.switchError', { error: String(e).slice(0, 180) });
+      } finally {
+        switchBusy = false;
+      }
+    }
 
     async function maybeStartBypass() {
       if (!lastChannel || bypassBusy) return;

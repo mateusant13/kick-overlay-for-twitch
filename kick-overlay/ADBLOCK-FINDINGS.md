@@ -1,6 +1,6 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-20. Chrome 155, extension **0.8.15**, persistent profile
+Last updated: 2026-10-21. Chrome 155, extension **0.8.17**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
 CDP port 9222. Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
@@ -90,6 +90,12 @@ Flow (measured on `vegas`, 2026-10-20 23:38 local):
 6. `BroadcastChannel` is origin-wide, so every worker now carries a random
    `pageId`; a page ignores messages from another tab. Without this, an ad in
    one Twitch tab started the overlay in every other tab (observed).
+7. **0.8.16/0.8.17:** the clean source can turn ad-only on a later refresh
+   (measured on `necros`). `player-bridge.js` filters ad segments out of every
+   `*.ttvnw.net` media playlist with an hls.js `pLoader` before hls.js parses
+   it. If the whole playlist is ads, it signals `ad-only`; the page asks the
+   worker for another type (`autoplay/android` first) and reloads the same
+   overlay iframe. See section 2.11.
 
 Measured real-ad run (`vegas`, midroll/preroll):
 
@@ -334,9 +340,51 @@ Repro note: the `token` usher query param is JSON, e.g.
 `{"player_type":"popout","platform":"web",...}`. The old base64 decoder
 returned `null` for every master, so the skip never happened before 0.8.13.
 
+### 2.11 0.8.16: the clean source itself can turn into an ad
+
+Measured on `necros` (2026-10-21): the overlay's own hls.js playlist changed
+from clean to ad-bearing **after** the probe. The worker saw a clean
+`site/web` media playlist (`adExtinf=0`) and started the overlay; seconds
+later the same overlay URL returned:
+
+```
+#EXTINF:2.000,DCM|264402997
+#EXTINF:2.000,DCM|...
+#EXTINF:2.000,Amazon|...
+```
+
+The native player was hidden, so the user saw the overlay playing the ad. The
+probe was not wrong; Twitch SSAI changed the playlist between refreshes. No
+token type is immune: tokens for site/popout/mobile/autoplay all still say
+`show_ads:true`.
+
+Fix (0.8.16): `player-bridge.js` installs an hls.js `pLoader` that strips
+Twitch ad segments from every media playlist **before hls.js parses it**. It
+only touches `*.ttvnw.net` URLs, so the YouTube layer is unaffected. On an
+ad-only refresh it returns the last clean live window (or an empty live
+playlist on first load) instead of buffering the ad. This is a playlist-level
+filter, not a UI hide: hls.js never receives the ad segment URLs.
+
+Measured follow-up (0.8.16, `necros`, 17:59:30-18:00:14): the filter did stop
+the ad (`adStrips` 22 -> 36, no ad segment requested), but hls.js stayed
+`Buffering rs=0 ns=2 buffered=0` for ~40s and the overlay was stopped by its
+60s timeout. The cached clean window is not enough once the live playlist is
+ad-only: hls.js has no new fragments to append.
+
+Fix (0.8.17): on the first ad-only refresh the bridge posts
+`{t:'ev', e:'ad-only'}`. The page sends `need-source` to the worker; the
+worker probes with `autoplay/android` first, then `mobile/android`, then the
+web types, and posts a fresh `ad-start` that reloads the **same** overlay
+iframe. `autoplay/android` is the type measured clean during SSAI ads and its
+360p HLS plays in hls.js. This keeps the native player hidden and avoids both
+the ad and the 40s black stall. A switch **tears down and recreates** the
+iframe instead of calling `loadSource` on the wedged hls.js instance, and gets
+a fresh 180s safety timeout. The old 60s timer was measured stopping a healthy
+replacement source while the ad pod was still running.
+
 ---
 
-## 3. Current extension behavior (0.8.15)
+## 3. Current extension behavior (0.8.16)
 
 `kick-overlay/twitch-adblock.js`:
 

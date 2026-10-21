@@ -66,11 +66,121 @@ if (HLS_MODE) {
   // 'seek'|'seekToLive'|'getState'} in, {t:'ready'} + ~1/s {t:'st'} + {t:'ev'}
   // out. hls.js plays the innertube hlsManifestUrl; native controls visible.
   V.controls = true; // native controls give the yt layer the embed-era UX
+  // 0.8.16: Twitch SSAI ads can appear on ANY token type. A playlist that
+  // looked clean at probe time can turn ad-only on its next refresh (measured
+  // on necros: site/web 15 clean segments -> 15 DCM/Amazon segments). Strip
+  // stitched ad segments in hls.js itself, before they are parsed/buffered.
+  // Keep the last clean playlist while an ad-only refresh is in flight, so
+  // hls.js freezes on the last content frame instead of playing the ad.
+  const cleanPlaylistCache = new Map();
+  const adFilterStats = { strips: 0, adOnly: 0, last: null, lastSignalAt: 0 };
+  let adOnlySignaled = false;
+  const twitchPlaylist = (url) => /(^|\.)ttvnw\.net\//i.test(String(url || ''));
+  const playlistCounts = (text) => {
+    let content = 0;
+    let ads = 0;
+    for (const line of String(text || '').replace(/\r/g, '').split('\n')) {
+      if (!line.startsWith('#EXTINF')) continue;
+      if (/,live\s*$/.test(line)) content++;
+      else ads++;
+    }
+    return { content, ads };
+  };
+  const stripTwitchAds = (text, url) => {
+    if (!text) return text;
+    const counts = playlistCounts(text);
+    if (!counts.ads) {
+      adOnlySignaled = false;
+      return text;
+    }
+    const lines = text.replace(/\r/g, '').split('\n');
+    const out = [];
+    let skipUri = false;
+    let leadingRemoved = 0;
+    let seenContent = false;
+    for (const line of lines) {
+      if (skipUri) {
+        // The segment URI (and optional byte-range tag) belongs to the ad
+        // EXTINF just removed. Tags before that URI are part of the ad too.
+        if (line.startsWith('#EXT-X-BYTERANGE')) continue;
+        if (line.startsWith('#')) continue;
+        skipUri = false;
+        if (!seenContent) leadingRemoved++;
+        continue;
+      }
+      if (line.startsWith('#EXTINF')) {
+        // Twitch marks content segments ",live"; stitched ad segments do not.
+        if (!/,live\s*$/.test(line)) {
+          skipUri = true;
+          continue;
+        }
+        seenContent = true;
+        out.push(line);
+        continue;
+      }
+      if (line.startsWith('#EXT-X-DATERANGE') && /twitch-stitched-ad|X-TV-TWITCH-AD-URL/i.test(line)) {
+        continue;
+      }
+      out.push(line);
+    }
+    let clean = out.join('\n');
+    const cleanCounts = playlistCounts(clean);
+    if (cleanCounts.content === 0) {
+      adFilterStats.adOnly++;
+      adFilterStats.last = { at: Date.now(), kind: 'ad-only', url: String(url).slice(0, 120) };
+      // 0.8.17: an ad-only refresh means this token type has no content right
+      // now. Hls.js can sit in Buffering forever on the stale cached window
+      // (measured on necros: 40s of black while the ad played). Ask the worker
+      // to probe other token types and reload the overlay with a clean one.
+      const now = Date.now();
+      if (!adOnlySignaled || now - adFilterStats.lastSignalAt > 2500) {
+        adOnlySignaled = true;
+        adFilterStats.lastSignalAt = now;
+        post({ t: 'ev', e: 'ad-only', d: String(counts.ads) });
+      }
+      // Reuse the last clean live window if we have one; otherwise hand
+      // hls.js an empty live playlist so it waits instead of buffering an ad.
+      return cleanPlaylistCache.get(url) || '#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:0\n';
+    }
+    adOnlySignaled = false;
+    // Removing leading ad segments shifts hls.js's implicit fragment numbers;
+    // bump MEDIA-SEQUENCE by the same amount so the remaining SNs stay monotonic.
+    if (leadingRemoved) {
+      clean = clean.replace(/#EXT-X-MEDIA-SEQUENCE:(\d+)/, (_m, n) => `#EXT-X-MEDIA-SEQUENCE:${Number(n) + leadingRemoved}`);
+    }
+    cleanPlaylistCache.set(url, clean);
+    adFilterStats.strips++;
+    adFilterStats.last = { at: Date.now(), kind: 'stripped', ads: counts.ads, content: cleanCounts.content, url: String(url).slice(0, 120) };
+    return clean;
+  };
+  class TwitchAdFilterLoader extends Hls.DefaultConfig.loader {
+    load(context, config, callbacks) {
+      const { type, url } = context;
+      if ((type === 'manifest' || type === 'level' || type === 'audioTrack') && twitchPlaylist(url)) {
+        const complete = callbacks.onSuccess;
+        callbacks.onSuccess = (response, stats, successContext, networkDetails) => {
+          try {
+            if (response && typeof response.data === 'string') {
+              const clean = stripTwitchAds(response.data, url);
+              if (clean !== response.data) {
+                response.data = clean;
+                post({ t: 'ev', e: 'adstrip', d: `${adFilterStats.strips}/${adFilterStats.adOnly}` });
+              }
+            }
+          } catch (e) {
+            post({ t: 'ev', e: 'adstrip-error', d: String(e).slice(0, 120) });
+          }
+          complete(response, stats, successContext, networkDetails);
+        };
+      }
+      super.load(context, config, callbacks);
+    }
+  }
   // 0.8.6 pain-1: the yt rewind window is TUNED, not whatever the playlist
-  // grants — liveBackBufferLength anchors the ~20s seekable window the bar,
+  // grants - liveBackBufferLength anchors the ~20s seekable window the bar,
   // the "LIVE -Ns" pill and the edge-clamp all promise (0.8.5 left it at the
   // hls.js default, so the window was shorter than the UI implied).
-  const h = new Hls({ maxBufferLength: 30, liveSyncDurationCount: 3, liveBackBufferLength: 20 });
+  const h = new Hls({ maxBufferLength: 30, liveSyncDurationCount: 3, liveBackBufferLength: 20, pLoader: TwitchAdFilterLoader });
   let currentUrl = null;
   let reloaded = false;
   // hls.js can start a DVR playlist at its oldest segment (measured: a 30s

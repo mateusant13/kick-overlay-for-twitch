@@ -98,6 +98,24 @@ returns `DIRECT` for everything else. Turning the checkbox off clears the PAC.
   ufw delete allow 8899/tcp
   ```
 
+### SSH tunnel (no exposed port)
+
+If you do not want the proxy port public, install it loopback-only:
+
+```bash
+sudo KO_PROXY_HOST=127.0.0.1 bash install.sh
+```
+
+Then keep a tunnel open from your PC:
+
+```bash
+ssh -N -L 8899:127.0.0.1:8899 user@your-vps
+```
+
+In the extension popup use `host:port = 127.0.0.1:8899` with the same
+user/pass. The SSH tunnel carries the Playlist/Auth traffic encrypted; nothing
+is exposed on the VPS public interface.
+
 ## Manual run (development)
 
 ```bash

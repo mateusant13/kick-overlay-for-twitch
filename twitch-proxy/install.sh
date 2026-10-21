@@ -20,7 +20,9 @@ if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.spli
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -y
     apt-get install -y ca-certificates curl
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    if ! curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; then
+      echo "==> NodeSource unavailable; falling back to the distro nodejs"
+    fi
     apt-get install -y nodejs
   else
     echo "unsupported distro: install Node.js >= 18 and rerun" >&2
@@ -42,7 +44,7 @@ if [ -z "${KO_PROXY_AUTH:-}" ]; then
 fi
 
 cat > "$ENV_FILE" <<EOF
-KO_PROXY_HOST=0.0.0.0
+KO_PROXY_HOST=${KO_PROXY_HOST:-0.0.0.0}
 KO_PROXY_PORT=${PORT}
 KO_PROXY_AUTH=${KO_PROXY_AUTH}
 EOF

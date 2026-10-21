@@ -123,3 +123,22 @@ Consequence: the only way to satisfy "no ads + no player change + no freeze"
 is a token type/platform that is **clean during an ad and HD**, used by the
 **native** player (no overlay). The page-context probe is the test; if it
 finds one, set `PLAYER_TYPE` / `CLEAN_PLATFORM` in `twitch-adblock.js`.
+
+## 2026-10-21 update: public proxies and the accepted fallback
+
+- **Do not use TTV LOL PRO's public proxies outside their extension.** Their
+  wiki forbids third-party use, the public nodes are rate-limited, and when
+  overloaded Twitch shows "commercial break in progress" (purple screen).
+  Abuse can get the client permanently banned from their infrastructure.
+- Random/open online proxies are worse: they can see SNI/IP, are unreliable,
+  and can change the apparent country of the account. No public proxy was
+  used in 0.8.20. An **own VPS** in an ad-free region is the only recommended
+  proxy egress; RU/KR were capped at 720p as of 2025.
+- The user accepted a **worse experience** if it guarantees no ad and keeps
+  the live visible. 0.8.20 therefore enables the hls.js overlay as the
+  best-effort ladder: `site`/`popout`/`mobile_web` first, `autoplay` last,
+  watchdog + source switch, restore native HD after two clean playlists.
+  This is not "native HD"; it is the fallback when no clean native-compatible
+  token exists.
+- VOD ads are CSAI and are handled separately by returning an empty ad list
+  from `edge.ads.twitch.tv` (see ADBLOCK-FINDINGS.md).

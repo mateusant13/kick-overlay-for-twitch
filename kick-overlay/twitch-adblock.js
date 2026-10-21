@@ -91,13 +91,14 @@
   // the Twitch player with the clean stream, mute/hide the native player, and
   // remove the overlay when the worker reports content again. This never
   // touches the player's own MSE.
-  // 0.8.18: the 0.8.15-0.8.17 clean-HLS overlay visibly replaced the Twitch
-  // player (hls.js chrome, 360p, iframe recreate) and could freeze on a source
-  // switch. The user requires the native player to stay untouched. Keep the
-  // overlay code for the opt-in path, but do not start it automatically: the
-  // native video is neither hidden nor muted, so playback/seek/fullscreen and
-  // the Twitch controls are exactly as Twitch shipped them.
-  const AD_OVERLAY_ENABLED = false;
+  // 0.8.20 fallback ladder: the proxy is still the best path (native HD), but
+  // when an ad is already stitched the client can still avoid showing it by
+  // covering the native player with a separate hls.js video fed by a clean
+  // lower-quality stream. This is deliberately a worse experience (reduced
+  // quality, no Twitch controls during the break) but it keeps the live
+  // visible and never lets the ad play. The native player is restored after
+  // two clean playlists.
+  const AD_OVERLAY_ENABLED = true;
   const bypassStats = { starts: 0, stops: 0, errors: 0, playing: 0, last: null };
   stats.adBypass = bypassStats;
   const overlay = {
@@ -118,6 +119,11 @@
     adEndTries: 0,
     ready: false,
     autoplayRetry: false,
+    playing: false,
+    switchTries: 0,
+    watchdogTimer: 0,
+    badge: null,
+    unmuteHandler: null,
     onMessage: null,
   };
 
@@ -151,9 +157,15 @@
     }
     if (!r || r.width < 40 || r.height < 40) {
       overlay.frame.style.display = 'none';
+      if (overlay.badge) overlay.badge.style.display = 'none';
       return;
     }
     overlay.frame.style.display = 'block';
+    if (overlay.badge) {
+      overlay.badge.style.display = 'block';
+      overlay.badge.style.left = `${Math.round(r.left) + 12}px`;
+      overlay.badge.style.top = `${Math.round(r.top) + 12}px`;
+    }
     // Put the frame INSIDE the player's stacking context. A body-level fixed
     // frame sat behind Twitch's video on channel pages; Chrome then treated it
     // as occluded and hls.js never loaded a segment (measured: rs=0, ns=2).
@@ -197,15 +209,21 @@
   function hideNativeVideos() {
     for (const v of document.querySelectorAll('video')) {
       if (overlay.hiddenVideos.some((x) => x.el === v)) continue;
-      overlay.hiddenVideos.push({ el: v, visibility: v.style.visibility });
+      overlay.hiddenVideos.push({ el: v, visibility: v.style.visibility, muted: v.muted });
       try { v.style.visibility = 'hidden'; } catch { /* ignore */ }
+      // Mute every native video, not just the main one: a PBP/ad video can
+      // keep playing audio behind the opaque overlay.
+      try { v.muted = true; } catch { /* ignore */ }
     }
   }
 
   function restoreNativeVideos() {
-    for (const { el, visibility } of overlay.hiddenVideos) {
+    for (const { el, visibility, muted } of overlay.hiddenVideos) {
       try {
-        if (el.isConnected) el.style.visibility = visibility;
+        if (el.isConnected) {
+          el.style.visibility = visibility;
+          if (typeof muted === 'boolean') el.muted = muted;
+        }
       } catch { /* ignore */ }
     }
     overlay.hiddenVideos = [];
@@ -246,10 +264,13 @@
   function restoreHeldMute() {
     if (!overlay.held) return;
     const v = overlay.video && overlay.video.isConnected ? overlay.video : mainVideo();
+    // Restore visibility/first, then apply the pre-hold mute state. Doing it
+    // the other way round lets a stored `muted:true` (captured after ad-hold)
+    // overwrite the real original state.
+    restoreNativeVideos();
     if (v) {
       try { v.muted = overlay.holdWasMuted; } catch { /* ignore */ }
     }
-    restoreNativeVideos();
     overlay.held = false;
   }
 
@@ -258,17 +279,44 @@
     overlay.extTimer = 0;
     try { clearTimeout(overlay.adEndTimer); } catch { /* ignore */ }
     overlay.adEndTimer = 0;
+    try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
+    overlay.watchdogTimer = 0;
     if (overlay.held) restoreHeldMute();
-    if (!overlay.frame) return;
+    if (!overlay.frame) {
+      // Even without a frame, a badge/unmute handler can be left over from a
+      // source switch that failed between teardown and rebuild.
+      if (overlay.badge) { try { overlay.badge.remove(); } catch { /* ignore */ } overlay.badge = null; }
+      if (overlay.unmuteHandler) {
+        try { document.removeEventListener('pointerdown', overlay.unmuteHandler, true); } catch { /* ignore */ }
+        overlay.unmuteHandler = null;
+      }
+      overlay.playing = false;
+      overlay.switchTries = 0;
+      return;
+    }
     try { clearInterval(overlay.positionTimer); } catch { /* ignore */ }
     try { clearTimeout(overlay.timeoutTimer); } catch { /* ignore */ }
     if (overlay.onMessage) window.removeEventListener('message', overlay.onMessage);
+    if (overlay.unmuteHandler) {
+      try { document.removeEventListener('pointerdown', overlay.unmuteHandler, true); } catch { /* ignore */ }
+      overlay.unmuteHandler = null;
+    }
+    if (overlay.badge) {
+      try { overlay.badge.remove(); } catch { /* ignore */ }
+      overlay.badge = null;
+    }
     try { overlay.frame.remove(); } catch { /* ignore */ }
     const v = overlay.video && overlay.video.isConnected ? overlay.video : mainVideo();
+    // restoreNativeVideos() restores every video's stored state, then the main
+    // video's pre-overlay mute state wins (the stored value can be the mute we
+    // applied in ad-hold/after hiding).
+    restoreNativeVideos();
     if (v) {
       try { v.muted = overlay.wasMuted; } catch { /* ignore */ }
+      // Hiding the native video does not normally pause it, but Twitch may
+      // pause when the element is occluded. Resume on restore.
+      try { const p = v.play(); if (p && p.catch) p.catch(() => {}); } catch { /* ignore */ }
     }
-    restoreNativeVideos();
     bypassStats.stops++;
     bypassStats.last = { type: 'stop', reason: String(reason || ''), at: Date.now() };
     overlay.frame = null;
@@ -278,6 +326,8 @@
     overlay.video = null;
     overlay.ready = false;
     overlay.autoplayRetry = false;
+    overlay.playing = false;
+    overlay.switchTries = 0;
     overlay.onMessage = null;
     // Tell the worker the overlay is gone so a timeout/player-error can retry
     // on a later ad playlist instead of leaving adBypassActive stuck true.
@@ -317,13 +367,24 @@
         try { clearTimeout(overlay.timeoutTimer); } catch { /* ignore */ }
         try { clearInterval(overlay.positionTimer); } catch { /* ignore */ }
         try { clearTimeout(overlay.adEndTimer); } catch { /* ignore */ }
+        try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
+        overlay.watchdogTimer = 0;
         if (overlay.onMessage) {
           try { window.removeEventListener('message', overlay.onMessage); } catch { /* ignore */ }
+        }
+        if (overlay.unmuteHandler) {
+          try { document.removeEventListener('pointerdown', overlay.unmuteHandler, true); } catch { /* ignore */ }
+          overlay.unmuteHandler = null;
+        }
+        if (overlay.badge) {
+          try { overlay.badge.remove(); } catch { /* ignore */ }
+          overlay.badge = null;
         }
         try { overlay.frame.remove(); } catch { /* ignore */ }
         overlay.frame = null;
         overlay.onMessage = null;
         overlay.ready = false;
+        overlay.playing = false;
       } else {
         // A second ad event with a fresher URL: reload the same frame and
         // cancel any pending ad-end grace timer from the previous pod.
@@ -372,7 +433,20 @@
     overlay.ready = false;
     overlay.autoplayRetry = false;
     overlay.adEndTries = 0;
-    try { v.muted = true; } catch { /* ignore */ }
+    overlay.playing = false;
+    if (!switchSource) overlay.switchTries = 0;
+
+    // Small, non-interactive indicator so the reduced-quality player is not
+    // mistaken for a broken Twitch player. Positioned in positionOverlay().
+    const badge = document.createElement('div');
+    badge.id = 'ko-adfix-badge';
+    badge.textContent = switchSource ? 'sem anúncio · trocando fonte limpa…' : 'sem anúncio · conectando fonte limpa…';
+    badge.style.cssText =
+      'position:fixed;z-index:2147483647;pointer-events:none;display:none;' +
+      'background:rgba(0,0,0,.72);color:#fff;font:12px/1.4 system-ui,sans-serif;' +
+      'padding:3px 7px;border-radius:4px;white-space:nowrap;';
+    try { document.body.appendChild(badge); } catch { /* ignore */ }
+    overlay.badge = badge;
     // Concurrency fix (measured): with ANY native Twitch video visible,
     // Chrome/hls.js keeps the overlay at rs=0/ns=2 forever on channel pages.
     // The page has more than one <video> (main + PBP); hide them all. The
@@ -386,6 +460,7 @@
       bypassStats.lastMsg = { t: m.t, state: m.st && m.st.state, st: m.st || null, at: Date.now() };
       if (m.t === 'ready') {
         overlay.ready = true;
+        if (overlay.badge) overlay.badge.textContent = 'sem anúncio · carregando…';
         overlaySend({ t: 'load', url: overlay.url });
         overlaySend({ t: 'mute', m: false });
         overlaySend({ t: 'play' });
@@ -412,6 +487,7 @@
         // master instead of leaving hls.js in Buffering.
         bypassStats.adOnly = (bypassStats.adOnly || 0) + 1;
         bypassStats.lastAdOnly = { d: m.d, at: Date.now() };
+        if (overlay.badge) overlay.badge.textContent = 'sem anúncio · trocando fonte limpa…';
         try {
           bypassChannel?.postMessage({ type: 'need-source', page: pageId, channel: overlay.channel || null });
         } catch {
@@ -426,6 +502,10 @@
       }
       if (m.t === 'st' && m.st) {
         if (m.st.state === 'Playing') {
+          overlay.playing = true;
+          try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
+          overlay.watchdogTimer = 0;
+          if (overlay.badge) overlay.badge.textContent = 'sem anúncio · qualidade reduzida';
           bypassStats.playing++;
           if (bypassStats.last?.type !== 'playing') {
             bypassStats.last = { type: 'playing', q: m.st.q, at: Date.now() };
@@ -440,6 +520,38 @@
       }
     };
     window.addEventListener('message', overlay.onMessage);
+
+    // Unmute on the first user gesture anywhere on the page. The native player
+    // is covered by the iframe, so Twitch's own volume control is not
+    // reachable while the fallback is active.
+    overlay.unmuteHandler = () => {
+      overlaySend({ t: 'mute', m: false });
+      overlaySend({ t: 'play' });
+      if (overlay.badge) overlay.badge.textContent = 'sem anúncio · qualidade reduzida';
+      try { document.removeEventListener('pointerdown', overlay.unmuteHandler, true); } catch { /* ignore */ }
+      overlay.unmuteHandler = null;
+    };
+    try { document.addEventListener('pointerdown', overlay.unmuteHandler, true); } catch { /* ignore */ }
+
+    // Watchdog: the clean master can still go ad-only on its media playlist.
+    // The iframe reports that, but if hls.js simply never reaches Playing we
+    // must not leave a permanent black frame. Ask the worker for a different
+    // source, at most twice, then restore the native player.
+    try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
+    overlay.watchdogTimer = setTimeout(() => {
+      if (!overlay.frame || overlay.playing) return;
+      if (overlay.switchTries >= 2) {
+        stopAdOverlay('no-source');
+        return;
+      }
+      overlay.switchTries++;
+      if (overlay.badge) overlay.badge.textContent = 'sem anúncio · trocando fonte limpa…';
+      try {
+        bypassChannel?.postMessage({ type: 'need-source', page: pageId, channel: overlay.channel || null });
+      } catch {
+        /* overlay is optional */
+      }
+    }, 7000);
 
     positionOverlay();
     overlay.positionTimer = setInterval(positionOverlay, 500);
@@ -481,8 +593,15 @@
         if (!v) return;
         overlay.held = true;
         overlay.holdWasMuted = v.muted;
-        try { v.muted = true; } catch { /* ignore */ }
-        hideNativeVideos();
+        // Mute immediately so the ad audio never plays. Do not hide the video
+        // yet: the clean source is still being probed, and a black frame is
+        // worse than one second of muted ad. startAdOverlay() covers it as
+        // soon as the source is ready.
+        try {
+          v.muted = true;
+        } catch {
+          /* ignore */
+        }
         return;
       }
       if (msg.type === 'ad-start') {
@@ -545,6 +664,46 @@
     }
   }
 
+  // ---- VOD CSAI ad-decision block -----------------------------------------
+  // VOD pre-roll/mid-roll ads are not in the HLS manifest; the player fetches
+  // an ad creative from edge.ads.twitch.tv and renders it over paused content.
+  // Community scripts use an empty ad list ([]) as the safe "no ads" shape.
+  // Keep this to ad hosts only; normal Twitch requests are untouched.
+  const AD_CREATIVE_HOSTS = new Set([
+    'edge.ads.twitch.tv',
+    'imasdk.googleapis.com',
+    'securepubads.g.doubleclick.net',
+    'pubads.g.doubleclick.net',
+  ]);
+  function isAdCreativeUrl(value) {
+    try {
+      const u = new URL(String(value || ''), location.href);
+      return AD_CREATIVE_HOSTS.has(u.host);
+    } catch {
+      return false;
+    }
+  }
+  function isAdTelemetryUrl(value) {
+    try {
+      const u = new URL(String(value || ''), location.href);
+      if (u.host === 'countess.twitch.tv') return true;
+      return u.host === 'spade.twitch.tv' && /ad|midroll|preroll|video_ad/i.test(u.pathname + u.search);
+    } catch {
+      return false;
+    }
+  }
+  function emptyAdResponse() {
+    stats.vodAdsBlocked = (stats.vodAdsBlocked || 0) + 1;
+    return new Response('[]', {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  function noContentResponse() {
+    return new Response('', { status: 204, statusText: 'No Content' });
+  }
+
   // ---- layer 1: page fetch / XHR token rewrite -----------------------------
   try {
     const realFetch = window.fetch;
@@ -553,6 +712,8 @@
         try {
           if (!isOn()) return realFetch.apply(this, arguments);
           const url = typeof input === 'string' ? input : (input && input.url) || '';
+          if (isAdCreativeUrl(url)) return Promise.resolve(emptyAdResponse());
+          if (isAdTelemetryUrl(url)) return Promise.resolve(noContentResponse());
           if (url.includes('gql.twitch.tv/gql') && init && typeof init.body === 'string') {
             const next = rewriteTokenBody(init.body);
             if (next !== init.body) init = { ...init, body: next };
@@ -574,17 +735,30 @@
   try {
     const xhrOpen = XMLHttpRequest.prototype.open;
     const xhrSend = XMLHttpRequest.prototype.send;
+    const xhrSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
     XMLHttpRequest.prototype.open = function (method, url) {
       try {
         this.__koUrl = String(url);
+        if (isOn() && isAdCreativeUrl(url)) {
+          // A data: URL makes the ad-decision XHR resolve with [] without a
+          // network request; 4xx/5xx would make the player retry the break.
+          this.__koBlockedAd = true;
+          stats.vodAdsBlocked = (stats.vodAdsBlocked || 0) + 1;
+          return xhrOpen.call(this, method, 'data:application/json;base64,' + btoa('[]'), true);
+        }
       } catch {
         /* ignore */
       }
       return xhrOpen.apply(this, arguments);
     };
+    XMLHttpRequest.prototype.setRequestHeader = function () {
+      // data: URLs reject custom headers (edge.ads.twitch.tv sends some).
+      if (this.__koBlockedAd) return;
+      return xhrSetRequestHeader.apply(this, arguments);
+    };
     XMLHttpRequest.prototype.send = function (body) {
       try {
-        if (isOn() && String(this.__koUrl || '').includes('gql.twitch.tv/gql')) {
+        if (!this.__koBlockedAd && isOn() && String(this.__koUrl || '').includes('gql.twitch.tv/gql')) {
           const next = rewriteTokenBody(body);
           if (next !== body) arguments[0] = next;
         }
@@ -606,6 +780,10 @@
     // swapping left the player permanently paused. 0.8.15 uses the separate
     // hls.js overlay instead (see the page-side code above).
     const ALL_AD_FALLBACK = false;
+    // 0.8.20: the client-side fallback ladder. The page covers the native
+    // player with a clean lower-quality HLS stream during stitched ads. This
+    // is opt-out via the adblock toggle (data-ko-adblock=0).
+    const AD_BYPASS_ENABLED = true;
     const realFetch = self.fetch.bind(self);
     const cleanCache = new Map();
     const mediaFallbackCache = new Map();
@@ -711,6 +889,17 @@
       return info.extinf - info.adExtinf;
     }
 
+    // Live ad bypass must never run for VOD. VOD media segments have no
+    // ",live" suffix, so playlistInfo() reports every VOD segment as an "ad";
+    // without this guard a live->VOD SPA navigation could cover the VOD with
+    // the old channel's live stream. Twitch live media is served from
+    // *.playlist.ttvnw.net/v1/playlist/ or *.playlist.live-video.net/, while
+    // VOD media is a cloudfront index-dvr.m3u8.
+    function isLiveMediaUrl(url) {
+      const u = String(url || '');
+      return /\/v1\/playlist\//.test(u) || /\.playlist\.live-video\.net\//.test(u);
+    }
+
     function parseVariants(masterText) {
       const lines = String(masterText || '').replace(/\r/g, '').split('\n');
       const urls = [];
@@ -771,27 +960,25 @@
     }
 
     // Find a master whose first two video renditions have NO stitched ads.
-    // autoplay/android is the measured clean type during a preroll; its 360p
-    // MSE is playable by hls.js (the web player's own MSE rejects it). Keep
-    // the list short: this runs during a live ad and delays the overlay.
+    // The 2026 TwitchAdSolutions forks put popout/site/mobile_web first and
+    // use autoplay only as a last resort: autoplay is 360p and can get stuck
+    // in a loading loop when used as a long-lived backup. We keep it last.
     async function findCleanHlsUrl(channel, preferFallback = false) {
-      // Prefer the web container (HD) and fall back to autoplay/android
-      // (clean during the measured preroll, but only 160p/360p). Probe one
-      // video rendition per type: this runs while the ad is on screen, so
-      // latency matters more than exhaustive coverage.
-      // On a mid-overlay source switch, start with autoplay/android: it was
-      // the type that stayed clean while the web types served SSAI ads.
       const types = preferFallback
         ? [
-            ['autoplay', 'android'],
-            ['mobile', 'android'],
-            ['site', 'web'],
+            ['mobile_web', 'web'],
             ['popout', 'web'],
+            ['site', 'web'],
+            ['mobile', 'android'],
+            ['autoplay', 'android'],
+            ['embed', 'web'],
           ]
         : [
             ['site', 'web'],
             ['popout', 'web'],
+            ['mobile_web', 'web'],
             ['mobile', 'android'],
+            ['embed', 'web'],
             ['autoplay', 'android'],
           ];
       for (const [playerType, platform] of types) {
@@ -837,6 +1024,16 @@
     let switchBusy = false;
     let lastSwitchAt = 0;
 
+    // A DNS/TLS hang while probing must not leave the native player muted for
+    // the rest of the ad. The probe itself keeps running, but the caller gets
+    // null and restores the native player / asks the watchdog to retry.
+    function withTimeout(promise, ms) {
+      return Promise.race([
+        promise,
+        new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+      ]);
+    }
+
     // The overlay's current source went ad-only mid-pod. Probe the types that
     // are known to stay clean during SSAI (autoplay/android first) and post a
     // fresh ad-start; the page rebuilds the hls.js iframe with it.
@@ -846,7 +1043,7 @@
       switchBusy = true;
       lastSwitchAt = Date.now();
       try {
-        const url = await findCleanHlsUrl(channel || lastChannel, true);
+        const url = await withTimeout(findCleanHlsUrl(channel || lastChannel, true), 10000);
         if (url && adBypassActive) {
           debugLog('bypass.switch', { channel: channel || lastChannel });
           postBypass({ type: 'ad-start', channel: lastChannel, url, switch: true });
@@ -869,7 +1066,7 @@
       lastBypassAt = Date.now();
       postBypass({ type: 'ad-hold', channel: lastChannel });
       try {
-        const url = await findCleanHlsUrl(lastChannel);
+        const url = await withTimeout(findCleanHlsUrl(lastChannel), 10000);
         if (url) {
           adBypassActive = true;
           postBypass({ type: 'ad-start', channel: lastChannel, url });
@@ -1073,6 +1270,10 @@
     self.fetch = async function (input, init) {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
       try {
+        // A VOD page reuses the same worker/page after an SPA navigation from
+        // a live channel. Drop the stale live channel so the VOD playlists
+        // can never trigger the live-only bypass ladder.
+        if (typeof url === 'string' && /\/vod\/v2\//.test(url)) lastChannel = null;
         // Clean picture-by-picture masters too. Twitch's 2025 SDA ads can
         // arrive on that player type; skipping them let a PBP master through
         // even though the page token itself had been rewritten to popout.
@@ -1112,20 +1313,18 @@
           const text = await response.clone().text();
           const info = playlistInfo(text);
           const clean = stripAds(text);
+          const liveMedia = isLiveMediaUrl(url);
           if (info.extinf > 0) {
-            if (info.adExtinf > 0) {
+            if (liveMedia && info.adExtinf > 0) {
               // Any stitched ad, not just an all-ad preroll. A midroll can be
               // mixed (e.g. 51 ad segments + 1 content segment in the same
               // refreshed playlist), and the player may already have buffered
               // the ad by the time stripAds() sees it. Cover the native player
               // with the clean hls.js stream immediately; stripAds() still
               // removes future ad segments from the native playlist.
-              // 0.8.18: the overlay is opt-in. Do not mint/probe clean
-              // sources or cover the native player on an ad; that path was the
-              // visible player swap + freeze. The playlist is still stripped
-              // below, and stats still record every ad playlist.
               cleanPlaylistStreak = 0;
-            } else if (adBypassActive) {
+              if (AD_BYPASS_ENABLED && !adBypassActive) maybeStartBypass();
+            } else if (liveMedia && adBypassActive) {
               // One clean playlist can still sit next to buffered ad media.
               // Require two consecutive clean refreshes before uncovering the
               // native player, so a midroll tail is not shown.

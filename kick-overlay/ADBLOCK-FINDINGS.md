@@ -658,3 +658,80 @@ Deep DOM ad snapshot essentials: `video.src`, `currentSrc`, `aria-label`,
    `cookie-extension/` or `instagram-followguard/`.
 7. If Twitch makes every token type ad-only, the overlay will `ad-fail` and
    the ad plays. Do not re-enable the old `ALL_AD_FALLBACK`.
+
+## 0.8.20 (2026-10-21): best-effort fallback ladder + VOD CSAI block
+
+### Research (GitHub / general adblockers)
+
+- **pixeltris/TwitchAdSolutions** (archived 2026-03-05) recommends proxies as
+  the only reliable method, then `vaft` / `video-swap-new`. `video-swap-new`
+  detects the stitched ad, requests a clean **lower-quality** playlist from a
+  different player type, swaps the source, and returns to HD after the break.
+  That is exactly the user-approved trade-off: worse quality, but no ad and the
+  live stays visible.
+- 2026 forks (`TTV-AB`, ryanbr) put `site`, `popout`, `mobile_web`, `embed`
+  first and use `autoplay` only as a last resort: `autoplay` is ~360p and can
+  get stuck in an endless loading circle when used as a long-lived backup.
+  `BackupSwapFirst` swaps immediately instead of stripping and showing black.
+- **VOD ads are CSAI**, not HLS-stitched. `zurarah/twitch-ad-blocker-with-vods`
+  intercepts `edge.ads.twitch.tv` (plus IMA/DoubleClick hosts) at the page
+  `fetch`/XHR layer and returns an empty ad list `[]`. A 4xx/5xx makes the
+  player retry the break, so 200 + `[]` is the safe shape.
+- **TTV LOL PRO public proxies are not usable here.** The project explicitly
+  forbids third-party use; public proxies are rate-limited, overloaded nodes
+  get Twitch's "commercial break in progress" purple screen, and abuse can get
+  the client permanently banned from their infrastructure. Random/open public
+  proxies are worse: they see SNI/IP, are unreliable, and can change the
+  account's apparent country. **Own VPS in an ad-free region is the only safe
+  proxy route** (Russia/South Korea were capped at 720p as of 2025).
+- No public proxy was used. The proxy mode remains opt-in and untouched.
+
+### Implemented
+
+- **VOD CSAI block** in `twitch-adblock.js` (MAIN world):
+  - `window.fetch`: ad creative hosts return `new Response("[]", {status:200,
+    content-type:"application/json"})`; ad telemetry (`countess`, ad-shaped
+    `spade`) returns 204.
+  - `XMLHttpRequest`: ad hosts are rewritten to
+    `data:application/json;base64,W10=` (POST kept; Chrome accepts it), custom
+    headers are skipped, and `stats.vodAdsBlocked` increments.
+  - Hosts: `edge.ads.twitch.tv`, `imasdk.googleapis.com`,
+    `securepubads.g.doubleclick.net`, `pubads.g.doubleclick.net`.
+- **Live fallback ladder enabled** (`AD_OVERLAY_ENABLED = true`,
+  `AD_BYPASS_ENABLED = true`):
+  - On a live media playlist with `adExtinf>0`, the worker mutes the native
+    player (`ad-hold`; it no longer hides it during the probe, so there is no
+    black screen), probes a clean master, and covers only the video rect with
+    the existing hls.js iframe.
+  - Source order: `site/web`, `popout/web`, `mobile_web/web`, `mobile/android`,
+    `embed/web`, `autoplay/android` last. On an overlay source switch,
+    `mobile_web`/`popout` are tried first.
+  - `ad-end` only after **two** clean native playlists. The native player is
+    restored, unmuted, made visible, and `play()` is called.
+  - Badge: `sem anúncio · conectando fonte limpa…` / `qualidade reduzida`.
+  - Watchdog: no `Playing` after 7 s -> ask the worker for another source, at
+    most twice, then restore the native player instead of leaving black.
+  - First pointerdown unmutes the overlay (the native volume button is covered).
+  - All native videos (main + PBP) are hidden **and muted**; original
+    visibility/mute are restored on stop.
+  - **Live-only guard**: `isLiveMediaUrl()` checks for
+    `*.playlist.ttvnw.net/v1/playlist/` or `*.playlist.live-video.net/`; VOD
+    playlists (no `,live` suffix) can never trigger the live bypass. A VOD
+    master also clears `lastChannel`, so a live->VOD SPA navigation cannot
+    show the old channel over the VOD.
+
+### Tests (2026-10-21, CDP 9222, loaded 0.8.20)
+
+- **VOD intercept**: on `twitch.tv/videos/2906724666`, direct `fetch` and XHR
+  to `edge.ads.twitch.tv/2018-01-01/3p/ads` both returned HTTP 200 `[]`;
+  `stats.vodAdsBlocked=2`. The VOD page did not show an ad.
+- **Manual overlay playback**: minted a clean `mobile_web/web` master in Node,
+  posted `ad-start` through `BroadcastChannel('ko-adblock-bypass')` on a live
+  `auraritylp` tab. Result: `#ko-adfix` present, badge
+  `sem anúncio · qualidade reduzida`, overlay `Playing` (started 480p, adapted
+  to 1080p), native video hidden+muted, no freeze. Posting `ad-end` removed
+  the iframe/badge and restored the native 1080p video unmuted and playing.
+- **Not yet proven**: automatic trigger on a real live ad. The trigger is in
+  the same worker path that already logged `adExtinf>0` in 0.8.17; the manual
+  test proves the overlay path itself. Next real ad should be checked for
+  `bypass.starts=1`, `#ko-adfix`, and restoration after two clean playlists.

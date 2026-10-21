@@ -236,3 +236,31 @@ Extension fixes in this round:
   (storage listener mirrors the row into `KO.ytRaw/ytId/kickSlug`);
 - disabling the overlay / selecting `player=twitch` now starts the page's own
   paused player instead of handing back a frozen `<video>`.
+
+## 0.8.20 (2026-10-21, best-effort fallback + VOD CSAI)
+
+- [x] Research GitHub adblockers: proxy is the only reliable HD path;
+  `video-swap-new`/`vaft` use a clean lower-quality backup and swap back;
+  `autoplay` is a last resort because it can hang in loading; VOD ads are CSAI.
+- [x] Public proxies rejected: TTV LOL PRO forbids third-party use, public
+  nodes are rate-limited and can show "commercial break in progress"; random
+  open proxies are unsafe. Own VPS remains the only recommended proxy.
+- [x] VOD CSAI block: page `fetch`/XHR intercepts `edge.ads.twitch.tv` and
+  IMA/DoubleClick hosts, returning `[]` (200). Verified fetch+XHR return 200
+  `[]` and `stats.vodAdsBlocked` increments on the VOD tab.
+- [x] Live fallback ladder enabled: on `adExtinf>0`, mute native (no hide
+  during probe), mint a clean backup, cover with the hls.js iframe; source
+  ladder `site`/`popout`/`mobile_web`/`mobile`/`embed`/`autoplay` last.
+- [x] Restore after two clean native playlists; restore visibility, mute state
+  and `play()` on all native videos.
+- [x] Overlay watchdog (7s, 2 switches), quality badge, click-to-unmute, and
+  live-only guard so VOD playlists never trigger the live bypass.
+- [x] Manual overlay test on live `auraritylp`: iframe Playing (480p -> 1080p),
+  badge visible, native hidden/muted; `ad-end` restored native 1080p playing.
+- [ ] Verify automatic trigger on the next real live ad: `bypass.starts=1`,
+  `#ko-adfix` appears, no ad audio/video, `ad-end` after two clean playlists.
+- [ ] If a real ad still shows for several seconds during the clean-source
+  probe, probe `autoplay/android` first during ads (fastest known clean) and
+  keep `mobile_web`/`popout` for the switch.
+- [ ] Proxy HD still needs an own VPS in an ad-free region; RU/KR egress is
+  reportedly capped at 720p.

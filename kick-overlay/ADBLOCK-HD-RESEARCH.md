@@ -100,3 +100,26 @@ reasonable trade-off until option 2 finds a clean HD type.
    clean.
 3. Do not re-enable `ALL_AD_FALLBACK`; feeding `autoplay/android` into Twitch's
    MSE left the player permanently paused (measured).
+
+## 2026-10-21 update: how to probe correctly
+
+Two measurement traps found while chasing the 0.8.17 freeze:
+
+- **Node/random-device probes do NOT see the ad.** On a page-confirmed ad
+  (`extinf 17, ad 3` at 19:10:08), 21 fresh Node sessions were all clean,
+  including `site/web`, seconds later. The SSAI stitcher is per
+  session/device, not a global ad break. Probe from the **page's own
+  context**, or not at all. The reliable method is an isolated-world
+  `fetch` (the content-script world is not rewritten by the MAIN-world token
+  wrapper) against `gql.twitch.tv` + `usher.ttvnw.net`:
+  `G:\Temp\opencode\ko-necros-ad-probe-page.mjs` does exactly this.
+- **A hidden/preloaded hls.js overlay never plays.** A full-size iframe that
+  is `opacity:0`, offscreen, or 2x2 stays `Idle/Buffering rs=0` forever;
+  Chrome throttles occluded/tiny video. Only a full-size, visible overlay
+  decodes. So the 0.8.18 preload idea is dead: any hls.js overlay will cost a
+  visible startup (the 0.8.15 "1-5s black" limit), which the user rejects.
+
+Consequence: the only way to satisfy "no ads + no player change + no freeze"
+is a token type/platform that is **clean during an ad and HD**, used by the
+**native** player (no overlay). The page-context probe is the test; if it
+finds one, set `PLAYER_TYPE` / `CLEAN_PLATFORM` in `twitch-adblock.js`.

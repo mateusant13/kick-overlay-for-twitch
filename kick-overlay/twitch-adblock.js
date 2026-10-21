@@ -41,6 +41,9 @@
   const GQL_HASH = 'ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9';
   const GQL_URL = 'https://gql.twitch.tv/gql';
   const PLAYER_TYPE = 'popout'; // clean token type; "embed" is the ad-bearing one
+  // 0.8.18: platform is configurable so a clean-during-ad platform (from the
+  // ad-matrix probe) can be adopted without touching the native player.
+  const CLEAN_PLATFORM = 'web';
   const stats = { rewrites: 0, workerHooks: 0, workerFailures: 0 };
   window.__koTwitchAdblockStats = stats;
   // BroadcastChannel is origin-wide, so two Twitch tabs would otherwise react
@@ -88,6 +91,13 @@
   // the Twitch player with the clean stream, mute/hide the native player, and
   // remove the overlay when the worker reports content again. This never
   // touches the player's own MSE.
+  // 0.8.18: the 0.8.15-0.8.17 clean-HLS overlay visibly replaced the Twitch
+  // player (hls.js chrome, 360p, iframe recreate) and could freeze on a source
+  // switch. The user requires the native player to stay untouched. Keep the
+  // overlay code for the opt-in path, but do not start it automatically: the
+  // native video is neither hidden nor muted, so playback/seek/fullscreen and
+  // the Twitch controls are exactly as Twitch shipped them.
+  const AD_OVERLAY_ENABLED = false;
   const bypassStats = { starts: 0, stops: 0, errors: 0, playing: 0, last: null };
   stats.adBypass = bypassStats;
   const overlay = {
@@ -281,6 +291,7 @@
   }
 
   function startAdOverlay(url, channel, switchSource = false) {
+    if (!AD_OVERLAY_ENABLED) return;
     if (!url) return;
     if (document.documentElement.getAttribute('data-ko-adblock') === '0') {
       stopAdOverlay('disabled');
@@ -458,6 +469,7 @@
         return;
       }
       if (msg.type === 'ad-hold') {
+        if (!AD_OVERLAY_ENABLED) return;
         if (overlay.frame) {
           try { clearTimeout(overlay.adEndTimer); } catch { /* ignore */ }
           overlay.adEndTimer = 0;
@@ -474,14 +486,17 @@
         return;
       }
       if (msg.type === 'ad-start') {
+        if (!AD_OVERLAY_ENABLED) return;
         startAdOverlay(msg.url, msg.channel, !!msg.switch);
         return;
       }
       if (msg.type === 'ad-end') {
+        if (!AD_OVERLAY_ENABLED) return;
         finishAdOverlay();
         return;
       }
       if (msg.type === 'ad-fail') {
+        if (!AD_OVERLAY_ENABLED) return;
         stopAdOverlay('ad-fail');
       }
     };
@@ -517,7 +532,7 @@
         }
         const before = v.playerType;
         v.playerType = PLAYER_TYPE;
-        if (typeof v.platform === 'string') v.platform = 'web';
+        if (typeof v.platform === 'string') v.platform = CLEAN_PLATFORM;
         stats.lastPlayerType = { before: before || '(none)', after: PLAYER_TYPE };
         if (before === 'picture-by-picture') stats.pbpRewrites = (stats.pbpRewrites || 0) + 1;
         changed = true;
@@ -992,7 +1007,7 @@
       // Do not mint a second master here: the extra GQL/usher round-trip and
       // the replacement master made the player rebuffer when it re-requested
       // the master on fullscreen/quality changes.
-      if (incoming && incoming.player_type === __KO_PLAYER_TYPE && incoming.platform === 'web') {
+      if (incoming && incoming.player_type === __KO_PLAYER_TYPE && incoming.platform === __KO_PLATFORM) {
         debugLog('cleanMaster.skipCleanToken', { channel, playerType: incoming.player_type, platform: incoming.platform });
         return null;
       }
@@ -1003,7 +1018,7 @@
         // playlists during an ad, but its MSE output is not playable in the
         // web player (video stays paused at readyState 1), so it is only a
         // last-resort source and must not replace the main master.
-        const text = await mintMaster(channel, __KO_PLAYER_TYPE, 'web');
+        const text = await mintMaster(channel, __KO_PLAYER_TYPE, __KO_PLATFORM);
         if (!text) {
           debugLog('cleanMaster.fail', { channel });
           return null;
@@ -1015,7 +1030,7 @@
           len: text.length,
           variants: parseVariants(text).length,
           playerType: __KO_PLAYER_TYPE,
-          platform: 'web',
+          platform: __KO_PLATFORM,
         });
         digestPlaylist(url + ' [cleanMaster]', text, false);
         cleanCache.set(channel, { text, at: Date.now() });
@@ -1105,8 +1120,11 @@
               // the ad by the time stripAds() sees it. Cover the native player
               // with the clean hls.js stream immediately; stripAds() still
               // removes future ad segments from the native playlist.
+              // 0.8.18: the overlay is opt-in. Do not mint/probe clean
+              // sources or cover the native player on an ad; that path was the
+              // visible player swap + freeze. The playlist is still stripped
+              // below, and stats still record every ad playlist.
               cleanPlaylistStreak = 0;
-              if (!adBypassActive && !bypassBusy) maybeStartBypass();
             } else if (adBypassActive) {
               // One clean playlist can still sit next to buffered ad media.
               // Require two consecutive clean refreshes before uncovering the
@@ -1185,6 +1203,7 @@
               'const __KO_GQL_HASH=' + JSON.stringify(GQL_HASH) + ';' +
               'const __KO_GQL_URL=' + JSON.stringify(GQL_URL) + ';' +
               'const __KO_PLAYER_TYPE=' + JSON.stringify(PLAYER_TYPE) + ';' +
+              'const __KO_PLATFORM=' + JSON.stringify(CLEAN_PLATFORM) + ';' +
               'const __KO_PAGE_ID=' + JSON.stringify(pageId) + ';';
             const blob = new Blob([prelude + '(' + workerMain.toString() + ')();\n' + code], {
               type: 'text/javascript',

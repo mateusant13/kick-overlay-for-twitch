@@ -170,6 +170,46 @@ Full evidence and next steps: `kick-overlay/ADBLOCK-FINDINGS.md`.
   quickly, and `stops` happens only after two clean native playlists.
 - [ ] Commit/push 0.8.17 after the real-ad check.
 
+## 0.8.18 (2026-10-21, user report: player changed and froze)
+
+- [x] User report: the 0.8.17 mid-ad `ad-only` switch recreated the overlay
+  iframe as a 360p hls.js player with Chrome controls and stalled around the
+  switch. "mudou o player ... era pra ser smooth".
+- [x] `AD_OVERLAY_ENABLED = false`: `ad-hold`/`ad-start`/`ad-end` no longer
+  hide, mute, or cover the native player. The Twitch video and controls are
+  untouched; no source probe runs during an ad.
+- [x] Worker still records ad playlists and strips ad lines from native
+  playlists; the Kick/YouTube HLS overlay path is unchanged.
+- [ ] Find a token type/platform that is **clean during an ad AND HD** so the
+  **native** player (no overlay) can be pointed at it. Watcher:
+  `G:\Temp\opencode\ko-necros-ad-matrix.mjs` ->
+  `G:\Temp\opencode\necros-ad-matrix.log`. If found, set the clean
+  type/platform in `twitch-adblock.js` and prove it on a real ad.
+- [ ] Re-test the native player on the next real ad: no `#ko-adfix`, no hidden
+  video, `paused=false`, `rs>=2`, controls/seek/fullscreen normal.
+
+## 0.8.19 (2026-10-21, proxy HD mode)
+
+- [x] User chose the TTV LOL PRO-style proxy path for HD + no ads + native
+  player.
+- [x] `twitch-proxy/`: dependency-free HTTP CONNECT proxy (basic auth, optional
+  IP allowlist, `/health`), `install.sh` systemd installer and README. It does
+  not strip playlists: the clean HD playlist comes from an ad-free egress region.
+- [x] `background.js`: `chrome.proxy` PAC for `usher.ttvnw.net`,
+  `gql.twitch.tv`, `*.playlist.ttvnw.net`, `*.playlist.live-video.net`;
+  `DIRECT` for everything else, including video segments. `PROXY …; DIRECT`
+  fallback. `webRequest.onAuthRequired` supplies proxy credentials.
+- [x] `popup.html/js`: `Proxy HD (sem ads)` host:port/user/pass + save.
+- [x] Local routing test: PAC applied, CONNECTs to gql/usher/playlist observed,
+  `extinf:14 adExtinf:0`, native video present, PAC returns to `system` when
+  disabled.
+- [ ] Deploy `twitch-proxy/` on a VPS in an ad-free region (e.g. Russia) and
+  confirm on a real ad that the native player stays HD and
+  `workerPlaylistLog` never shows `adExtinf>0`.
+- [ ] If GQL latency is bad, replace the broad `gql` PAC route with a
+  body-aware redirect of only `PlaybackAccessToken`.
+
+
 ## Diagnostic harness (added 2026-10-20)
 
 One command now drives a clean guest profile and checks every layer:

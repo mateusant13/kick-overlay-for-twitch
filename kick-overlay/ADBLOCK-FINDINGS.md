@@ -122,6 +122,90 @@ player's MSE. That was measured to leave the player permanently paused.
 
 ---
 
+## 1.2 0.8.18: overlay disabled (user requirement: no player change)
+
+The user's report after 0.8.17:
+
+> travou a live. mudou o player, q e algo q tu implementou, e travou. nao era
+> pra mudar. era pra ser smooth
+
+0.8.17's mid-ad `ad-only` path tore the iframe down and recreated it with
+`autoplay/android`. That is the change they saw: a 360p hls.js player with
+Chrome controls replacing the Twitch player, plus a rebuffer/stall around the
+switch. 0.8.16 was no better (hls.js sat in `Buffering` ~40s on an ad-only
+refresh).
+
+0.8.18 therefore ships `AD_OVERLAY_ENABLED = false`:
+
+- `ad-hold` / `ad-start` / `ad-end` / `ad-fail` no longer hide, mute, or cover
+  the native player. The Twitch `<video>` and its controls are untouched, so
+  seek/fullscreen/quality keep working and nothing can freeze on a switch.
+- The worker still records every ad playlist (`workerPlaylistLog`) and still
+  strips ad lines from native playlists (so mixed playlists lose future ad
+  segments), but it no longer mints/probes clean sources during an ad.
+- The HLS overlay code remains for the opt-in path (Kick/YouTube layers still
+  use `player.html`/`player-bridge.js`); only the automatic Twitch-ad overlay
+  is off.
+
+Trade-off: with the overlay off, an all-ad playlist can still play natively.
+The next step is the one thing not yet measured: whether some token
+type/platform is **clean during an ad AND HD**. If one is, the native player
+can be pointed at it directly (no overlay at all), which satisfies both
+"no ads" and "no player change". `G:\Temp\opencode\ko-necros-ad-matrix.mjs`
+watches the `necros` tab and probes all 21 type/platform pairs the moment the
+page reports an ad; results go to `G:\Temp\opencode\necros-ad-matrix.log`.
+
+---
+
+## 1.3 0.8.19: proxy mode (HD, native player, no SSAI)
+
+The user chose the only path that can satisfy **HD + no ads + native player**:
+a TTV LOL PRO-style egress proxy. Twitch decides SSAI from the **egress
+IP/region of the playlist request**, so a proxy in a region where Twitch does
+not fill ads returns a clean HD playlist. Video segments stay direct; only the
+playlist/usher/GQL traffic goes through the proxy (a few MB per session).
+
+Implementation:
+
+- `twitch-proxy/ko-proxy.mjs` — dependency-free HTTP CONNECT proxy with basic
+  auth, optional IP allowlist, `/health`, systemd installer (`install.sh`) and
+  README. No ad stripping: the clean playlist comes from the proxy's region.
+- `kick-overlay/background.js` — `chrome.proxy` PAC (scope `regular`) routes
+  only:
+  `usher.ttvnw.net`, `gql.twitch.tv`, `*.playlist.ttvnw.net`,
+  `*.playlist.live-video.net`. Everything else is `DIRECT`, including the video
+  segments. `PROXY …; DIRECT` so a dead proxy falls back to normal playback
+  instead of a black player.
+- Proxy basic auth is supplied through
+  `chrome.webRequest.onAuthRequired` (`webRequestAuthProvider`), so Chrome never
+  prompts. The PAC is only cleared when this extension set it (`ko.twitchProxyApplied`).
+- `popup.html/js` — `Proxy HD (sem ads)` checkbox, `host:port`, user/pass,
+  save. Editable from any page.
+
+Verified locally (2026-10-21):
+
+- Set `{enabled:true, host:'127.0.0.1', port:8899}` via the service worker;
+  `chrome.proxy.settings.get` returned the expected `pac_script`.
+- Reloaded `necros`; the proxy log showed
+  `CONNECT gql.twitch.tv:443`, `CONNECT usher.ttvnw.net:443`,
+  `CONNECT sae13.playlist.ttvnw.net:443`; the worker's playlist was
+  `extinf:14, adExtinf:0`; no `#ko-adfix`, native `<video>` present.
+- Disabling the checkbox returned `chrome.proxy.settings.get` to
+  `{mode:"system"}` (no leftover browser proxy).
+- Local egress is Brazil, so this proves routing/compatibility, **not** ad
+  removal. Ad removal needs the VPS in an ad-free region.
+
+Known trade-offs:
+
+- All `gql.twitch.tv` traffic is proxied (PAC cannot inspect GQL operation
+  names), so UI/chat latency follows the proxy's latency. If that is a problem,
+  add a body-aware GQL redirect later.
+- A VPS in a region Twitch has flagged can return "Commercial break in
+  progress"; move region/provider if so.
+- The proxy is a public service: keep basic auth on and firewall the port.
+
+---
+
 ## 2. What is known about Twitch's ad pipeline (measured)
 
 ### 2.1 Token

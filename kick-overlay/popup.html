@@ -47,6 +47,17 @@
       outline: none;
     }
     input[type="text"]:focus { border-color: #772ce8; }
+    input[type="password"] {
+      flex: 1;
+      min-width: 0;
+      background: #18181b;
+      border: 1px solid #2d2d33;
+      color: #efeff1;
+      border-radius: 4px;
+      padding: 5px 7px;
+      outline: none;
+    }
+    input[type="password"]:focus { border-color: #772ce8; }
     button {
       background: #772ce8;
       border: 0;
@@ -83,8 +94,21 @@
     </div>
     <div class="row">
       <label for="adblock">Twitch adblock</label>
-      <input type="checkbox" id="adblock" title="Bloqueia ads SSAI da Twitch (token popout + overlay limpo)" />
+      <input type="checkbox" id="adblock" title="Reescreve o token e remove linhas de ad dos playlists nativos, sem trocar o player" />
     </div>
+    <div class="row">
+      <label for="proxyOn" title="Proxy HTTP em região sem ads; o vídeo continua direto">Proxy HD (sem ads)</label>
+      <input type="checkbox" id="proxyOn" />
+    </div>
+    <div class="map">
+      <input type="text" id="proxyHost" placeholder="proxy host:port" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="map" style="margin-top:6px">
+      <input type="text" id="proxyUser" placeholder="usuário" autocomplete="off" spellcheck="false" />
+      <input type="password" id="proxyPass" placeholder="senha" autocomplete="new-password" />
+      <button id="proxySave">Salvar</button>
+    </div>
+    <div class="hint" id="proxyHint">Proxy HTTP em região sem ads. Só as playlists passam por ele; o vídeo continua direto e o player nativo não muda.</div>
     <div class="row">
       <label for="player">Player</label>
       <select id="player">

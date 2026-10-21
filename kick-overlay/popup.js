@@ -2,7 +2,25 @@
 'use strict';
 
 const KEY = 'ko.v2';
+const PROXY_KEY = 'ko.twitchProxy';
 const $ = (id) => document.getElementById(id);
+
+async function readProxy() {
+  try {
+    const o = await chrome.storage.local.get(PROXY_KEY);
+    return o[PROXY_KEY] || {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeProxy(p) {
+  try {
+    await chrome.storage.local.set({ [PROXY_KEY]: p });
+  } catch {
+    /* ignore */
+  }
+}
 
 async function readState() {
   try {
@@ -64,6 +82,44 @@ async function kickStatus(slug) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const slug = twitchSlugFromUrl(tab && tab.url);
   const st = await readState();
+
+  // ---- Twitch proxy (HD, no SSAI) ----------------------------------------
+  // Editable from any page: the proxy is a browser-level setting, not tied to
+  // the current Twitch tab.
+  const proxy = await readProxy();
+  $('proxyOn').checked = !!proxy.enabled;
+  $('proxyHost').value = proxy.host ? `${proxy.host}:${proxy.port || 8899}` : '';
+  $('proxyUser').value = proxy.user || '';
+  $('proxyPass').value = proxy.pass || '';
+  if (proxy.enabled) $('proxyHint').textContent = 'Proxy ativo. Recarregue a Twitch se acabou de ativar.';
+
+  async function saveProxy() {
+    const raw = $('proxyHost').value.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+    let host = raw;
+    let port = 8899;
+    const m = raw.match(/^\[([^\]]+)\]:(\d+)$/) || raw.match(/^([^:]+):(\d+)$/);
+    if (m) {
+      host = m[1];
+      port = Number(m[2]) || 8899;
+    }
+    const enabled = $('proxyOn').checked;
+    if (enabled && !host) {
+      $('proxyHint').textContent = 'Informe host:port do proxy.';
+      return;
+    }
+    await writeProxy({
+      enabled,
+      host,
+      port,
+      user: $('proxyUser').value.trim(),
+      pass: $('proxyPass').value,
+    });
+    $('proxyHint').textContent = enabled
+      ? 'Proxy ativo — recarregue a Twitch para aplicar.'
+      : 'Proxy desligado.';
+  }
+  $('proxySave').addEventListener('click', saveProxy);
+  $('proxyOn').addEventListener('change', saveProxy);
 
   $('channel').textContent = slug ? `twitch.tv/${slug}` : 'Not on a Twitch channel';
   $('enabled').checked = st.enabled === undefined ? true : !!st.enabled;

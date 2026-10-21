@@ -209,3 +209,121 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     .catch((e) => sendResponse({ id: null, videoId: direct || null, error: String(e).slice(0, 80) }));
   return true; // async sendResponse
 });
+
+// ---- Twitch proxy mode (HD, no SSAI ads) -----------------------------------
+// Twitch makes the SSAI decision from the egress IP/region of the playlist
+// request. A proxy in an ad-free region returns a clean HD playlist; the video
+// segments still go direct. This PAC routes ONLY the playlist/usher/GQL hosts,
+// so normal browsing and the video bytes never touch the proxy.
+const KO_PROXY_KEY = 'ko.twitchProxy';
+const KO_PROXY_APPLIED = 'ko.twitchProxyApplied';
+const KO_PROXY_ROUTES = [
+  'usher.ttvnw.net',
+  'gql.twitch.tv',
+  '*.playlist.ttvnw.net',
+  '*.playlist.live-video.net',
+];
+
+function koPac(proxyHost, proxyPort) {
+  const routes = KO_PROXY_ROUTES.map((h) =>
+    h.startsWith('*.') ? `shExpMatch(host, '${h}')` : `host === '${h}'`,
+  ).join(' ||\n      ');
+  return (
+    'function FindProxyForURL(url, host) {\n' +
+    '  host = host.toLowerCase();\n' +
+    '  if (\n' +
+    `      ${routes}\n` +
+    '  ) {\n' +
+    `    return 'PROXY ${proxyHost}:${proxyPort}; DIRECT';\n` +
+    '  }\n' +
+    '  return \'DIRECT\';\n' +
+    '}\n'
+  );
+}
+
+async function koApplyProxy() {
+  let p = {};
+  let applied = false;
+  try {
+    const o = await chrome.storage.local.get([KO_PROXY_KEY, KO_PROXY_APPLIED]);
+    p = o[KO_PROXY_KEY] || {};
+    applied = !!o[KO_PROXY_APPLIED];
+  } catch {
+    return;
+  }
+  if (!p.enabled || !p.host) {
+    if (!applied) return; // never touch a proxy we did not set
+    try {
+      await chrome.proxy.settings.clear({ scope: 'regular' });
+    } catch {
+      /* policy/other extension owns it */
+    }
+    try {
+      await chrome.storage.local.remove(KO_PROXY_APPLIED);
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  const proxyHost = String(p.host)
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .trim();
+  const proxyPort = Number(p.port) || 8899;
+  if (!proxyHost) return;
+  try {
+    await chrome.proxy.settings.set({
+      value: { mode: 'pac_script', pacScript: { data: koPac(proxyHost, proxyPort) } },
+      scope: 'regular',
+    });
+    await chrome.storage.local.set({ [KO_PROXY_APPLIED]: true });
+  } catch (e) {
+    console.warn('[ko] proxy set failed', String((e && e.message) || e).slice(0, 120));
+  }
+}
+
+koApplyProxy();
+chrome.runtime.onInstalled.addListener(koApplyProxy);
+chrome.runtime.onStartup.addListener(koApplyProxy);
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes[KO_PROXY_KEY]) koApplyProxy();
+});
+
+// Supply basic-auth credentials for the Twitch proxy without a Chrome prompt.
+try {
+  chrome.webRequest.onAuthRequired.addListener(
+    (details, callback) => {
+      if (!details.isProxy) {
+        callback({});
+        return;
+      }
+      let done = false;
+      const finish = (r) => {
+        if (done) return;
+        done = true;
+        callback(r);
+      };
+      // Never leave Chrome's auth request hanging.
+      setTimeout(() => finish({}), 1500);
+      chrome.storage.local.get(KO_PROXY_KEY, (o) => {
+        const p = (o && o[KO_PROXY_KEY]) || {};
+        if (!p.enabled || !p.user) {
+          finish({});
+          return;
+        }
+        finish({ authCredentials: { username: String(p.user), password: String(p.pass || '') } });
+      });
+    },
+    {
+      urls: [
+        'https://usher.ttvnw.net/*',
+        'https://gql.twitch.tv/*',
+        'https://*.playlist.ttvnw.net/*',
+        'https://*.playlist.live-video.net/*',
+      ],
+    },
+    ['asyncBlocking'],
+  );
+} catch (e) {
+  console.warn('[ko] proxy auth listener failed', String((e && e.message) || e).slice(0, 120));
+}

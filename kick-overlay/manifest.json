@@ -1,7 +1,7 @@
 {
   "name": "Kick & YouTube Overlay for Twitch",
   "description": "Ad-free Twitch: when a streamer is live on Kick or YouTube too, plays their real full-HD stream over the Twitch player — Twitch ads become invisible and inaudible. Toggle from the toolbar.",
-  "version": "0.8.10",
+  "version": "0.8.15",
   "manifest_version": 3,
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
@@ -27,7 +27,8 @@
     "https://live-video.net/*",
     "https://*.live-video.net/*",
     "https://*.youtube.com/*",
-    "https://*.googlevideo.com/*"
+    "https://*.googlevideo.com/*",
+    "https://*.ttvnw.net/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -80,7 +81,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Kick Overlay",
+    "default_title": "Kick & YouTube Overlay for Twitch",
     "default_icon": {
       "16": "images/icon16.png",
       "32": "images/icon32.png",

@@ -127,11 +127,19 @@ if (HLS_MODE) {
       : V.paused
         ? (V.readyState === 0 ? 'Idle' : 'Paused')
         : (V.readyState < 2 ? 'Buffering' : 'Playing');
+    let buffered = 0;
+    try {
+      if (V.buffered && V.buffered.length) buffered = V.buffered.end(V.buffered.length - 1) - pos;
+    } catch { /* not ready */ }
     return {
       state,
       paused: V.paused,
       muted: V.muted,
       volume: V.volume,
+      rs: V.readyState,
+      ns: V.networkState,
+      err: V.error ? V.error.code : null,
+      buffered: isFinite(buffered) ? Math.max(0, buffered) : 0,
       pos,
       lat,
       dur,
@@ -222,6 +230,7 @@ if (HLS_MODE) {
   });
   h.on(Hls.Events.ERROR, (_e, d) => {
     beacon('hls_err', { type: d.type, details: d.details, fatal: !!d.fatal });
+    post({ t: 'ev', e: 'hls', d: String(d.details || d.type || ''), fatal: !!d.fatal, url: String(d.url || '').slice(0, 160) });
     if (d.fatal) {
       post({ t: 'ev', e: 'error', d: String(d.details || d.type) });
       // One reload per url (stale manifest on live switches); then the

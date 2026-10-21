@@ -73,6 +73,68 @@ profile at `twitch.tv/jb_sniper` + a live YouTube HLS video.
   fails). Added `stats.pbpRewrites` so a future report can be diagnosed
   without guessing.
 
+## 0.8.13 (2026-10-20, stability + SSAI findings)
+
+- [x] The 0.8.11 DNR blocks (`amazon-adsystem`, `ads.twitch.tv`) did **not**
+  stop the ad. CDP also blocked the whole `client-side-video-ads` chunk plus
+  Amazon/tungsten/media-amazon; the preroll still played. So the ad is not
+  CSAI. Removed both DNR rules + their host permissions in 0.8.13: no benefit,
+  and blocking a top-level Amazon ad navigation produced a scary
+  `ERR_BLOCKED_BY_CLIENT` page.
+- [x] Added a worker digest via `BroadcastChannel('ko-adblock-debug')`. It
+  proved the preroll playlist is **all ads**:
+  `#EXTINF:2.002,Amazon|...` x3-4 with
+  `CLASS="twitch-stitched-ad"` and `X-TV-TWITCH-AD-ROLL-TYPE="PREROLL"`.
+  `stripAds()` removed every ad line and then its all-ad guard returned the
+  original text (`changed:false`) -> ad played.
+- [x] Tried replacing the all-ad playlist with a clean playlist from another
+  token type. `autoplay/android` was clean (15 content segments) and removed
+  the ad UI, but its MSE output is **not playable in the web player**: video
+  stayed `paused rs=1` forever. All web-container types are ad-only during
+  the ad. PBP promotion also failed (empty placeholder video). Fallback is
+  **disabled** (`ALL_AD_FALLBACK = false`).
+- [x] **Fullscreen stutter fix:** `cleanMaster()` no longer mints a second
+  master when the incoming usher token is already `popout/web`. The old
+  `tokenInfo()` assumed base64 and always returned null, so every fullscreen /
+  quality-triggered master request paid an extra GQL+usher round-trip and got
+  a replacement master. The token is URL-encoded JSON; fixed.
+- [x] Stats counters added: `adOnlySeen`, `fallbacks`, `lastFallbackType`,
+  plus `workerPlaylistLog` / `workerDebugLog` ring buffers (worker id included).
+- [ ] Re-run normal playback + fullscreen check after 0.8.13, rerun harness,
+  commit. Harness on 0.8.12: `adblock.stats` + `adblock.token-body` PASS;
+  Kick/YT FAIL because the tested channels were offline; native Twitch video
+  was `paused=false rs=0` in the guest (environment, not adblock).
+
+Full evidence and next steps: `kick-overlay/ADBLOCK-FINDINGS.md`.
+
+## 0.8.15 (2026-10-20, real ad on `vegas`)
+
+- [x] **Clean HLS overlay** replaces the old MSE fallback. On **any** stitched
+  ad (`adExtinf > 0`, including mixed midrolls), the worker posts `ad-hold`;
+  the page hides/mutes all native `<video>` elements and covers the player
+  with `player.html?m=hls` fed by a freshly minted clean master.
+- [x] Probe order: `site/web` (HD), `popout/web`, `mobile/android`,
+  `autoplay/android` (360p). During the measured ad, all web/mobile types were
+  ad-only; `autoplay/android` was clean, so the overlay played 360p. Outside
+  the ad, `site/web` plays 1080p in the hls.js overlay.
+- [x] Hiding the native video is **required**: with it visible, hls.js stayed
+  `rs=0/ns=2` forever on channel pages. Restoration verified on `ad-end`.
+- [x] `ad-end` requires **two consecutive clean playlists**, then waits up to
+  3s for Twitch's ad DOM to clear before uncovering the native player.
+- [x] Fixed an origin-wide `BroadcastChannel` bug: every worker now carries a
+  random `pageId`, so an ad in one Twitch tab cannot start overlays in other
+  tabs.
+- [x] Added host permission `https://*.ttvnw.net/*`; debug `st` now exposes
+  `rs/ns/err/buffered`, and HLS errors are surfaced.
+- [x] Real-ad evidence (`vegas`, 23:38): `adfix=true`, `site/web adExtinf=3`,
+  `mobile/android adExtinf=3`, `autoplay/android adExtinf=0`, overlay
+  `Playing`, `adfix=false` after clean playlists.
+- [ ] Independent verification of normal playback/seek/fullscreen and
+  Kick/YouTube overlays (separate subagent).
+- [ ] Harness 21 checks, vendor sync + force reload, commit/push.
+- [ ] HD clean source during ads (see `ADBLOCK-HD-RESEARCH.md`); current
+  reliable source is 360p.
+
 ## Diagnostic harness (added 2026-10-20)
 
 One command now drives a clean guest profile and checks every layer:

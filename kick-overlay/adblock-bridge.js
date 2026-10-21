@@ -15,6 +15,9 @@
     }
     try {
       root.setAttribute('data-ko-adblock', on ? '1' : '0');
+      // MAIN-world ad code needs the extension origin for the clean-stream
+      // player iframe, and cannot call chrome.runtime.getURL itself.
+      root.setAttribute('data-ko-ext-id', chrome.runtime.id);
     } catch {
       /* document may be tearing down */
     }

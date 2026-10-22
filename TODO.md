@@ -257,8 +257,14 @@ Extension fixes in this round:
   live-only guard so VOD playlists never trigger the live bypass.
 - [x] Manual overlay test on live `auraritylp`: iframe Playing (480p -> 1080p),
   badge visible, native hidden/muted; `ad-end` restored native 1080p playing.
-- [ ] Verify automatic trigger on the next real live ad: `bypass.starts=1`,
-  `#ko-adfix` appears, no ad audio/video, `ad-end` after two clean playlists.
+- [x] Automatic trigger on a real live ad (2026-10-22 02:06, `whyandr3w`):
+  `adExtinf` rose `0 -> 3 -> ... -> 29`, `bypass.starts` `1..6`,
+  `#ko-adfix` appeared with no manual `ad-start`, `stops` `1..2`.
+  That tab was backgrounded, so the native video stayed paused at `rs=0` and
+  the overlay never reached `Playing`; the watchdog switched/stopped it.
+- [ ] Visible real-ad end-to-end check: `bypass.starts=1`, overlay `Playing`,
+  no ad audio/video, then `stops=1` and native 1080p restored after two clean
+  playlists. (Playback itself is already proven by the manual visible test.)
 - [ ] If a real ad still shows for several seconds during the clean-source
   probe, probe `autoplay/android` first during ads (fastest known clean) and
   keep `mobile_web`/`popout` for the switch.

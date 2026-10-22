@@ -731,7 +731,16 @@ Deep DOM ad snapshot essentials: `video.src`, `currentSrc`, `aria-label`,
   `sem anúncio · qualidade reduzida`, overlay `Playing` (started 480p, adapted
   to 1080p), native video hidden+muted, no freeze. Posting `ad-end` removed
   the iframe/badge and restored the native 1080p video unmuted and playing.
-- **Not yet proven**: automatic trigger on a real live ad. The trigger is in
-  the same worker path that already logged `adExtinf>0` in 0.8.17; the manual
-  test proves the overlay path itself. Next real ad should be checked for
-  `bypass.starts=1`, `#ko-adfix`, and restoration after two clean playlists.
+- **Automatic trigger (real ad, 2026-10-22 02:06)**: opened
+  `twitch.tv/whyandr3w` in a background tab; a real midroll arrived ~13 s after
+  load. Observed `lastWorkerPlaylist.adExtinf` rise `0 -> 3 -> 5 -> ... -> 29`,
+  `adBypass.starts` `1..6`, `#ko-adfix` present, and `stops` `1..2`. This proves
+  the real-ad path calls `maybeStartBypass()` and creates the overlay without a
+  manual `ad-start`.
+  - Caveat: that tab was backgrounded, so Chrome kept the native `<video>`
+    paused at `rs=0` and the overlay never reached `Playing` (`playing=0`);
+    the watchdog then switched/stopped it. Playback of the same overlay was
+    already proven in a **visible** tab (manual test above). A visible real-ad
+    run is the only remaining end-to-end check: expect `starts` to stay at 1,
+    `playing>0`, no ad audio/video, then `stops=1` and native 1080p restored
+    after two clean playlists.

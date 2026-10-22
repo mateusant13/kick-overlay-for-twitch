@@ -52,6 +52,24 @@
   stats.pageId = pageId;
   let bypassChannel = null;
 
+  // Persistent event log. The ISOLATED bridge (adblock-bridge.js) listens for
+  // this DOM event and appends to chrome.storage.local['ko.adlog'] (ring
+  // buffer, 500 events). Unlike console/stats, this survives a page refresh:
+  // if an ad appears after a reload, the timestamps are still there next time.
+  // `ms` is relative to navigation start, so content->ad delay can be read
+  // directly from the log without correlating clocks.
+  function adLog(ev, detail) {
+    const d = Object.assign({ ms: Math.round(performance.now()) }, detail || {});
+    stats.adLogCount = (stats.adLogCount || 0) + 1;
+    stats.lastAdLog = { ev, d };
+    try {
+      document.dispatchEvent(new CustomEvent('ko-adlog', { detail: JSON.stringify({ ev, d }) }));
+    } catch {
+      /* bridge may not be ready very early */
+    }
+  }
+  adLog('script-start', { href: location.href });
+
   // Debug channel: the player worker cannot touch page globals, so it posts
   // a compact digest of every playlist it sees. This is how we tell stitched
   // SSAI (ad lines inside the m3u8) from client-side MSE (no ad lines at all).
@@ -68,6 +86,16 @@
         stats.lastWorkerPlaylist = msg;
         if (msg.adOnly) stats.adOnlySeen = (stats.adOnlySeen || 0) + 1;
         if (msg.changed === 'adOnly->fallback') stats.fallbacks = (stats.fallbacks || 0) + 1;
+        if (msg.adOnly || msg.adExtinf > 0 || msg.changed) {
+          adLog('worker-playlist', {
+            extinf: msg.extinf,
+            adExtinf: msg.adExtinf,
+            adOnly: !!msg.adOnly,
+            hasStitched: !!msg.hasStitched,
+            changed: msg.changed || null,
+            url: String(msg.url || '').slice(0, 180),
+          });
+        }
         return;
       }
       if (msg.type === 'debug') {
@@ -77,6 +105,10 @@
         stats.lastWorkerDebug = msg;
         if (msg.step === 'probe.clean' && msg.detail) {
           stats.lastFallbackType = `${msg.detail.playerType}/${msg.detail.platform}`;
+        }
+        // Keep the durable log small: only decisions, not every probe.
+        if (/^(bypass|prewarm)\./.test(String(msg.step || ''))) {
+          adLog('worker-debug', { step: msg.step, detail: msg.detail || null });
         }
       }
     };
@@ -229,22 +261,44 @@
     overlay.hiddenVideos = [];
   }
 
-  function adUiPresent() {
+  // Real ad chrome only. The old any-aria-label match treated Twitch's
+  // "Experimenta 1 mês sem anúncios" promo button (32x32) as an ad, which
+  // logged fake ad-ui-on events and could delay uncovering the native player.
+  function adUiDetail() {
     try {
-      for (const e of document.querySelectorAll('[aria-label]')) {
-        if (!/an.ncio|advert/i.test(e.getAttribute('aria-label') || '')) continue;
-        if (e.getBoundingClientRect().width > 10 && e.getBoundingClientRect().height > 5) return true;
-      }
-      const sda = document.querySelector('[class*="stream-display-ad__wrapper"]:not([class*="hidden"])');
-      if (sda) {
+      // Twitch can keep a hidden squeezeback wrapper before the visible ad
+      // wrapper; querySelector() would only ever see the hidden one.
+      for (const sda of document.querySelectorAll('[class*="stream-display-ad__wrapper"]')) {
         const r = sda.getBoundingClientRect();
-        if (r.width > 20 && r.height > 20) return true;
+        const cls = String(sda.className || '');
+        if (r.width > 20 && r.height > 20 && !/hidden/i.test(cls)) {
+          return { kind: 'wrapper', w: Math.round(r.width), h: Math.round(r.height) };
+        }
+      }
+      // Twitch's real countdown is like "Anúncio (0:12)" /
+      // "Advertisement (0:15)". Require the numeric part so plain labels and
+      // promo buttons cannot match.
+      for (const e of document.querySelectorAll('[aria-label]')) {
+        const label = e.getAttribute('aria-label') || '';
+        if (!/an.ncio|advert/i.test(label)) continue;
+        if (/sem\s+an.ncios|without\s+ads?|no\s+ads?|ad-?free|remove\s+ads?|experimenta|teste|try\s+1/i.test(label)) continue;
+        if (!/\(\s*\d|\d+\s*(s|seg|segundos?|seconds?)\b/i.test(label)) continue;
+        const r = e.getBoundingClientRect();
+        if (r.width > 10 && r.height > 5) {
+          return { kind: 'aria', label: label.slice(0, 120), w: Math.round(r.width), h: Math.round(r.height) };
+        }
       }
     } catch {
       /* DOM can be mid-mutation */
     }
-    return false;
+    return null;
   }
+
+  function adUiPresent() {
+    return !!adUiDetail();
+  }
+  // Exposed for diagnostics/tests only; not used by the ad path.
+  stats.adUiDetail = adUiDetail;
 
   function finishAdOverlay() {
     if (!overlay.frame) {
@@ -576,6 +630,13 @@
     bypassChannel.onmessage = (ev) => {
       const msg = ev && ev.data;
       if (!msg || typeof msg !== 'object' || msg.page !== pageId) return;
+      adLog('bypass-msg', {
+        type: String(msg.type || ''),
+        channel: msg.channel || null,
+        switch: !!msg.switch,
+        hasUrl: !!msg.url,
+        reason: msg.reason ? String(msg.reason).slice(0, 80) : null,
+      });
       if (document.documentElement.getAttribute('data-ko-adblock') === '0') {
         stopAdOverlay('disabled');
         return;
@@ -632,6 +693,123 @@
       return true;
     }
   };
+
+  // ---- durable recorder ----------------------------------------------------
+  // Runs whether adblock is ON or OFF. This is what makes a refresh useful:
+  // every content/ad transition is appended to storage with `ms` since
+  // navigation, so a preroll that appears 4s after load is still measurable
+  // after the tab has moved on.
+  const rec = { ad: false, playing: false, adSince: 0, lastTick: 0, netSeen: new Map() };
+  function videoInfo(v) {
+    if (!v) return null;
+    return {
+      ct: Math.round(v.currentTime * 10) / 10,
+      dur: Number.isFinite(v.duration) ? Math.round(v.duration * 10) / 10 : null,
+      w: v.videoWidth,
+      h: v.videoHeight,
+      rs: v.readyState,
+      paused: v.paused,
+      muted: v.muted,
+    };
+  }
+  function sampleVideo() {
+    try {
+      const vs = [...document.querySelectorAll('video')];
+      const v =
+        vs.find((x) => x.isConnected && !x.paused && x.videoWidth > 0) ||
+        vs.find((x) => x.videoWidth > 0) ||
+        vs[0] ||
+        null;
+      return videoInfo(v);
+    } catch {
+      return null;
+    }
+  }
+  function recLog(ev, detail) {
+    adLog(ev, Object.assign({ video: sampleVideo(), adblock: isOn() }, detail || {}));
+  }
+
+  try {
+    for (const type of ['playing', 'pause', 'waiting', 'stalled', 'loadedmetadata', 'emptied', 'error']) {
+      document.addEventListener(
+        type,
+        (e) => {
+          const t = e && e.target;
+          if (!t || t.tagName !== 'VIDEO') return;
+          recLog('video-' + type, { targetMuted: !!t.muted });
+        },
+        true,
+      );
+    }
+  } catch {
+    /* recorder is best-effort */
+  }
+
+  // Resource timing catches the ad SDK / creative requests even when the
+  // adblock fetch hook is disabled, and gives a timestamp before the ad UI.
+  try {
+    const po = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        const u = String(e.name || '');
+        if (!/edge\.ads\.twitch\.tv|amazon-adsystem|doubleclick|imasdk|ads\.twitch/i.test(u)) continue;
+        const key = u.slice(0, 120);
+        const prev = rec.netSeen.get(key) || 0;
+        if (Date.now() - prev < 800) continue;
+        rec.netSeen.set(key, Date.now());
+        if (rec.netSeen.size > 40) {
+          const first = rec.netSeen.keys().next().value;
+          rec.netSeen.delete(first);
+        }
+        adLog('ad-net', {
+          url: u.slice(0, 180),
+          start: Math.round(e.startTime || 0),
+          dur: Math.round(e.duration || 0),
+          initiator: String(e.initiatorType || ''),
+        });
+      }
+    });
+    po.observe({ type: 'resource', buffered: true });
+  } catch {
+    /* PerformanceObserver is optional */
+  }
+
+  setInterval(() => {
+    try {
+      const adDetail = adUiDetail();
+      const ad = !!adDetail;
+      if (ad !== rec.ad) {
+        const since = rec.adSince;
+        rec.ad = ad;
+        if (ad) rec.adSince = Date.now();
+        rec.lastTick = 0;
+        recLog(ad ? 'ad-ui-on' : 'ad-ui-off', {
+          // Never derive a duration from adSince=0; that printed epoch seconds.
+          adSec: ad ? 0 : since ? Number(((Date.now() - since) / 1000).toFixed(1)) : null,
+          match: adDetail,
+        });
+        if (!ad) rec.adSince = 0;
+      }
+      const v = sampleVideo();
+      const playing = !!(v && !v.paused && v.w > 0 && v.rs >= 2);
+      if (playing !== rec.playing) {
+        rec.playing = playing;
+        // A video playing while the ad UI is up is the ad creative, not
+        // content. Label it separately so content->ad is unambiguous.
+        recLog(playing ? (ad ? 'ad-video-play' : 'content-play') : 'content-stop', { ad });
+      }
+      if (ad && Date.now() - rec.lastTick > 1000) {
+        rec.lastTick = Date.now();
+        recLog('ad-tick', { adSec: Number(((Date.now() - rec.adSince) / 1000).toFixed(1)) });
+      }
+    } catch {
+      /* DOM can be mid-mutation */
+    }
+  }, 500);
+  // At document_start the bridge has not applied storage yet, so logging
+  // `adblock` here would always say true. Log the resolved state after the
+  // async storage read has had time to set the attribute.
+  adLog('recorder-start', { href: location.href, video: sampleVideo() });
+  setTimeout(() => recLog('recorder-ready', { href: location.href }), 500);
 
   function rewriteTokenBody(body) {
     if (typeof body !== 'string' || body.length < 8) return body;
@@ -963,8 +1141,22 @@
     // The 2026 TwitchAdSolutions forks put popout/site/mobile_web first and
     // use autoplay only as a last resort: autoplay is 360p and can get stuck
     // in a loading loop when used as a long-lived backup. We keep it last.
-    async function findCleanHlsUrl(channel, preferFallback = false) {
-      const types = preferFallback
+    async function findCleanHlsUrl(channel, preferFallback = false, prewarmMode = false) {
+      const types = prewarmMode
+        ? [
+            // Prewarm should maximize the chance the token is still clean
+            // when the ad actually lands. autoplay/android is the measured
+            // clean-during-SSAI type; it is 360p, but the user accepts lower
+            // quality during the break. The overlay can still switch to a
+            // better web type if this one goes ad-only.
+            ['autoplay', 'android'],
+            ['mobile', 'android'],
+            ['mobile_web', 'web'],
+            ['popout', 'web'],
+            ['site', 'web'],
+            ['embed', 'web'],
+          ]
+        : preferFallback
         ? [
             ['mobile_web', 'web'],
             ['popout', 'web'],
@@ -1023,6 +1215,13 @@
     let cleanPlaylistStreak = 0;
     let switchBusy = false;
     let lastSwitchAt = 0;
+    // The first ~4s of a fresh page are usually content before the preroll.
+    // Mint and probe a clean backup during that window so an ad can be covered
+    // immediately instead of spending 1-3s probing after the ad starts.
+    const PREWARM_TTL = 90 * 1000;
+    let prewarm = { channel: null, url: null, at: 0, busy: false };
+    let prewarmBusyChannel = null;
+    let prewarmPromise = null;
 
     // A DNS/TLS hang while probing must not leave the native player muted for
     // the rest of the ad. The probe itself keeps running, but the caller gets
@@ -1059,6 +1258,34 @@
       }
     }
 
+    async function prewarmCleanSource(channel) {
+      if (!channel || prewarm.busy) return;
+      if (prewarm.channel === channel && Date.now() - prewarm.at < PREWARM_TTL) return;
+      prewarm.busy = true;
+      prewarmBusyChannel = channel;
+      prewarmPromise = (async () => {
+        try {
+          const url = await withTimeout(findCleanHlsUrl(channel, true), 8000);
+          if (url) {
+            prewarm = { channel, url, at: Date.now(), busy: false };
+            debugLog('prewarm.ok', { channel });
+          } else {
+            prewarm.busy = false;
+            debugLog('prewarm.fail', { channel });
+          }
+        } catch (e) {
+          prewarm.busy = false;
+          debugLog('prewarm.error', { error: String(e).slice(0, 160) });
+        }
+      })();
+      try {
+        await prewarmPromise;
+      } finally {
+        prewarmBusyChannel = null;
+        prewarmPromise = null;
+      }
+    }
+
     async function maybeStartBypass() {
       if (!lastChannel || bypassBusy) return;
       if (Date.now() - lastBypassAt < 15000) return;
@@ -1066,7 +1293,26 @@
       lastBypassAt = Date.now();
       postBypass({ type: 'ad-hold', channel: lastChannel });
       try {
-        const url = await withTimeout(findCleanHlsUrl(lastChannel), 10000);
+        let url = null;
+        let prewarmAge = 0;
+        if (prewarm.channel === lastChannel && prewarm.url && Date.now() - prewarm.at < PREWARM_TTL) {
+          url = prewarm.url;
+          prewarmAge = Date.now() - prewarm.at;
+          prewarm = { channel: null, url: null, at: 0, busy: false };
+          debugLog('bypass.prewarmHit', { channel: lastChannel, age: prewarmAge });
+        }
+        if (!url && prewarmPromise && prewarmBusyChannel === lastChannel) {
+          // The page-load prewarm is still in flight; wait briefly for it
+          // instead of launching a duplicate probe.
+          await withTimeout(prewarmPromise, 3500);
+          if (prewarm.channel === lastChannel && prewarm.url && Date.now() - prewarm.at < PREWARM_TTL) {
+            url = prewarm.url;
+            prewarmAge = Date.now() - prewarm.at;
+            prewarm = { channel: null, url: null, at: 0, busy: false };
+            debugLog('bypass.prewarmWaitHit', { channel: lastChannel, age: prewarmAge });
+          }
+        }
+        if (!url) url = await withTimeout(findCleanHlsUrl(lastChannel), 10000);
         if (url) {
           adBypassActive = true;
           postBypass({ type: 'ad-start', channel: lastChannel, url });
@@ -1284,6 +1530,10 @@
           } catch {
             /* ignore */
           }
+          // Start the prewarm as soon as the live master appears: this is the
+          // earliest point where the channel is known, and it buys the most
+          // of the ~4s content grace before a preroll.
+          if (lastChannel) prewarmCleanSource(lastChannel);
           let tokenRaw = null;
           try { tokenRaw = new URL(url).searchParams.get('token'); } catch {}
           debugLog('master.request', {
@@ -1337,6 +1587,12 @@
             } else {
               cleanPlaylistStreak = 0;
             }
+          }
+          // Use the pre-ad grace window: while the live playlist is clean,
+          // keep one warm, pre-probed clean master ready. When the preroll
+          // lands, maybeStartBypass() can cover it without the 1-3s probe.
+          if (liveMedia && info.extinf > 0 && info.adExtinf === 0 && !adBypassActive) {
+            prewarmCleanSource(lastChannel);
           }
           // All-ad preroll/master window: there is no content segment to keep.
           // Swap in a live media playlist from the clean master instead of

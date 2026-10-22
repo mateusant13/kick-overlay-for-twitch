@@ -270,3 +270,18 @@ Extension fixes in this round:
   keep `mobile_web`/`popout` for the switch.
 - [ ] Proxy HD still needs an own VPS in an ad-free region; RU/KR egress is
   reportedly capped at 720p.
+
+## 0.8.21 (2026-10-22, durable ad log + detector fix)
+
+- [x] Persist ad events to `chrome.storage.local['ko.adlog']` (ring buffer 500,
+  new `sid` per page load, append-only across refresh).
+- [x] Bridge logs `boot`, `adblock-change`, `visibility`, `pagehide`.
+- [x] Recorder logs `content-play`/`content-stop`, `ad-video-play`,
+  `ad-ui-on`/`ad-ui-off`, `ad-tick`, `video-*`, `ad-net` with `ms` since
+  navigation.
+- [x] Fix false ad UI: ignore "Experimenta 1 mes sem anuncios" promo and scan
+  all `stream-display-ad__wrapper` elements (hidden squeezeback can be first).
+- [x] Cross-refresh check: 13 -> 28 events, two `sid`s, same storage key.
+- [ ] Real preroll with adblock off after a user refresh: read
+  `ad-ui-on.d.ms - content-play.d.ms` and use observed + 1s as the delay
+  target. Current log is cleared for this run.

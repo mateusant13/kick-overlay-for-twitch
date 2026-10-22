@@ -1,6 +1,6 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-21. Chrome 155, extension **0.8.17**, persistent profile
+Last updated: 2026-10-22. Chrome 155, extension **0.8.21**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
 CDP port 9222. Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
@@ -744,3 +744,89 @@ Deep DOM ad snapshot essentials: `video.src`, `currentSrc`, `aria-label`,
     run is the only remaining end-to-end check: expect `starts` to stay at 1,
     `playing>0`, no ad audio/video, then `stops=1` and native 1080p restored
     after two clean playlists.
+
+---
+
+## 0.8.21 (2026-10-22) - durable ad log + ad-UI detector fix
+
+Why: ads arrive only after some refreshes; `console` and
+`window.__koTwitchAdblockStats` die on reload, so "next time" there was no
+evidence. The log is now persisted across page loads.
+
+### Storage and reading it
+
+`chrome.storage.local['ko.adlog']` is a ring buffer of **500 events**, oldest
+dropped. Events are **appended**, never cleared on page load. Each load gets a
+new `sid`; `boot.d.href` identifies the page.
+
+Read from any extension page (hidden `popup.html` via CDP, or the extension's
+console context):
+
+```js
+chrome.storage.local.get('ko.adlog', o => console.table(o['ko.adlog']));
+```
+
+Record shape: `{ t, sid, ev, d }`:
+- `t` - wall clock (`Date.now()`).
+- `sid` - page-load id; changes on every refresh.
+- `d.ms` - ms since navigation start (`performance.now()`), so
+  **content -> ad = ad-ui-on.d.ms - content-play.d.ms**.
+- `recorder-ready.d.adblock` is the resolved toggle after the bridge's async
+  storage read. `recorder-start` intentionally omits `adblock` because at
+  `document_start` the bridge has not applied storage yet.
+
+### Events
+
+- `boot` (bridge), `script-start`, `recorder-start`, `recorder-ready`
+- `content-play` / `content-stop` - only while the ad UI is absent
+- `ad-video-play` - video playing while the ad UI is present
+- `ad-ui-on` / `ad-ui-off` - includes `d.match` (`{kind:"wrapper"}` or
+  `{kind:"aria",label}`) and `d.adSec`
+- `ad-tick` - every 1s during an ad, with `adSec`
+- `ad-net` - PerformanceObserver resource entries for
+  `edge.ads.twitch.tv`, `amazon-adsystem`, `doubleclick`, `imasdk`, with
+  `start`/`dur`/`initiator`. This also captures display/banner ads, so
+  `ad-net` alone is **not** proof of a video preroll.
+- `video-playing/pause/waiting/stalled/loadedmetadata/emptied/error`
+- `bypass-msg` - `ad-hold`/`ad-start`/`ad-end`/`ad-fail`; only `hasUrl`, the
+  playback token is never written to storage
+- `worker-playlist` / `worker-debug` - only ad-related playlists/decisions
+
+### Detector fix (important)
+
+The old `adUiPresent()` accepted **any** `aria-label` matching
+`/an.ncio|advert/`. Twitch's ad-free promo button
+`aria-label="Experimenta 1 mês sem anúncios"` (32x32) matched it. That caused:
+- fake `ad-ui-on` events in the log;
+- `finishAdOverlay()` waiting on a non-ad element before uncovering the native
+  player.
+
+New detector:
+- scans **all** `[class*="stream-display-ad__wrapper"]` elements (Twitch can
+  keep a hidden squeezeback wrapper first, so `querySelector()` only saw the
+  hidden one);
+- accepts a visible wrapper, or an aria-label with a numeric countdown;
+- excludes `sem anúncios` / `without ads` / `no ads` / `ad-free` /
+  `remove ads` / `experimenta` / `teste` / `try`.
+
+Unit test with mocked `getBoundingClientRect`:
+`promoOnly -> null`, `wrapDetail -> {kind:"wrapper",w:300,h:200}`,
+`hidden first + visible second -> {kind:"wrapper",w:320,h:180}`.
+
+Live smoke (zayco01, adblock off, hidden tab): no fake `ad-ui-on`;
+`content-play` at 3.25s; only `ad-net` display requests.
+
+### Persistence check
+
+Hidden tab `zayco01`, adblock off:
+- first load: 13 events, `sid=mvk2zt28-443fo`;
+- after reload: 28 events, sids `mvk2zt28-443fo` + `mvk2zwub-r6uw6`.
+Both sessions are present, proving append-without-clear across refresh.
+
+### Note for the next real ad
+
+The tabs currently open were loaded with the old content script. Refresh one
+Twitch tab after extension reload 0.8.21 to inject the new bridge/recorder.
+With adblock off, the next preroll should produce `ad-ui-on` with
+`match.kind="wrapper"` and `content-play` (or `ad-video-play` if it starts
+during the ad). Use `d.ms` for the content -> ad delay.

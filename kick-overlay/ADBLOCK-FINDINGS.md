@@ -979,3 +979,22 @@ now/300/1200ms all `paused:false`, ct 0.1 -> 0.7; final native `rs=4` but
 Twitch reported paused (cold-start re-pause, same as the earlier `hiyo`
 run). Watcher4 final: **runs=30 withAd=7 firstframe=7 fallback=0
 resumeStillPaused=0**.
+
+### User Chrome live verification (0.8.24)
+
+The vendor copy (`ojdhhbnnmdhlkinhddgoikfpbhehnojc`) was reloaded from
+0.8.22 to 0.8.24 and a live tab on `kittykat02_` was reloaded. Chrome was
+occluded, so the page was kept visible with CDP focus emulation/lifecycle
+for the test (the real user tab is unaffected when focused normally).
+
+- `ad-hold` 7.968s, `ad-start` 10.116s (**2.15s**)
+- iframe at `opacity:0.01` while the native stayed visible
+- `overlay-reveal` 13.322s, reason **`firstframe`** (3.21s after ad-start)
+- overlay **360p Playing**, native hidden; no fallback timeout
+- `ad-end` 55.783s; `native-resume` now paused:true, 300ms paused:false
+  ct=35269.7, 1200ms paused:false ct=35270.6; final native `rs=4` playing
+- CSS opacity became 1 only at reveal; the hidden-native gap was covered by
+  the 360p clean frame, not by a black element.
+
+The diagnostic `testOverlay()` with a stale playlist URL did not reach
+`Playing`; it is not used by the real ad path.

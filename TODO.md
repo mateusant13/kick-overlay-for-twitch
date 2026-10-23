@@ -286,7 +286,7 @@ Extension fixes in this round:
   `ad-ui-on.d.ms - content-play.d.ms` and use observed + 1s as the delay
   target. Current log is cleared for this run.
 
-## 0.8.22 (2026-10-23, hybrid rewind + first-frame reveal)
+## 0.8.22-0.8.24 (2026-10-23, hybrid rewind + first-frame reveal)
 
 - [x] Measure the "4-5s refresh window": ad-only playlist appears 2.85-10.6s
   after load; it appeared at 2.85s **while paused**. The window is
@@ -303,10 +303,15 @@ Extension fixes in this round:
   `ad-start`; overlay 360p played; `ad-end` restored.
 - [x] Post-`ad-end` native resume retry (`native-resume` at 0/300/1200ms plus
   Twitch play-button click).
-- [ ] Confirm resume retry across the channel list (background watcher
-  `ko-bg-results.jsonl`).
-- [ ] Probe `autoplay/android` first on a cold preroll so the clean 360p
-  overlay starts in ~1s instead of spending ~9s probing HD types.
+- [x] Confirm resume retry across the channel list (background watcher
+  `ko-bg-results3.jsonl`; 6 real pods, every `native-resume now` logged
+  paused:false; `hiyo` was paused again at the final sample, likely Twitch
+  buffering, and `agurin` load 4 had a second ad).
+- [x] Probe `autoplay/android` first on a cold preroll: 0.8.23 cut cold
+  hold -> start from 9.4s to 4.30-4.83s (the remaining 3.5s was the prewarm
+  wait).
+- [ ] Validate 0.8.24 prewarm wait 800ms (background `ko-bg-results4.jsonl`);
+  expected cold hold -> start ~1.6-2.0s.
 - [ ] The true no-black/no-freeze swap is still unsolved: hls.js does not
   buffer while the native video is visible; the current best is a short
   native freeze/loading gap, then the clean 360p stream.

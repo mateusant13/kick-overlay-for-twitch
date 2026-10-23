@@ -1470,9 +1470,11 @@
           debugLog('bypass.prewarmHit', { channel: lastChannel, age: prewarmAge });
         }
         if (!url && prewarmPromise && prewarmBusyChannel === lastChannel) {
-          // The page-load prewarm is still in flight; wait briefly for it
-          // instead of launching a duplicate probe.
-          await withTimeout(prewarmPromise, 3500);
+          // The page-load prewarm is still in flight. On a cold preroll it
+          // usually needs 3-5s, and the ad is visible for that whole wait.
+          // Give it only 800ms, then start the autoplay 360p source; the
+          // prewarm can still populate `prewarm` for the next ad.
+          await withTimeout(prewarmPromise, 800);
           if (prewarm.channel === lastChannel && prewarm.url && Date.now() - prewarm.at < PREWARM_TTL) {
             url = prewarm.url;
             prewarmAge = Date.now() - prewarm.at;

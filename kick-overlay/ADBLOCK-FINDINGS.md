@@ -919,3 +919,37 @@ The 0.8.22 background run measured `ad-hold` at 1.693s and `ad-start` only at
 then falls back to the web/HD types. `switchCleanSource()` still prefers the
 web types if the first source goes ad-only. A background run is measuring the
 new hold -> start delay.
+
+### 0.8.23 background run (separate Edge, 43 loads / 25.4 min)
+
+The watcher counted 8 "ad" loads, but two (`auraritylp` loads 3 and 4) were
+`worker-playlist` probe results (`adExtinf:1760`, `adOnly:true`) with no
+`ad-hold`, `ad-start`, or `overlay-reveal`; the probe result alone is not an
+ad trigger. The six real pods:
+
+| channel | ad playlist | ad-hold | ad-start | overlay-reveal | ad-end | quality |
+|---|---|---|---|---|---|---|
+| kittykat02_ | 2.680s | 2.679s | 7.216s | 8.619s (firstframe) | 64.719s | 360p |
+| hiyo | 2.269s | 2.268s | 6.718s | 8.111s (firstframe) | 62.612s | 360p |
+| kittykat02_ | 1.974s | 1.973s | 6.291s | 7.460s (firstframe) | 64.954s | 360p |
+| agurin | 7.849s | 7.843s | 7.844s (prewarm hit) | 9.790s (firstframe) | 61.859s | 1080p |
+| gasogo | 1.995s | 1.994s | 6.772s | 8.197s (firstframe) | 52.080s | 360p |
+| agurin | 6.599s | 6.593s | 6.594s (prewarm hit) | 8.314s (firstframe) | 70.598s | 1080p |
+
+- 6/6 `firstframe`, 0 fallback timeouts.
+- reveal -> ad-start: 1.17-1.95s.
+- cold hold -> start: 4.30-4.83s (the 3.5s prewarm wait plus the autoplay
+  probe); warm prewarm hits start immediately.
+- resume: every pod logged `native-resume now paused:false`; ct advanced in
+  5/6. `hiyo` was still `paused:true` at the final sample at ct 0.3 (cold
+  stream; Twitch may have paused/buffered after the stop), and the watcher
+  read the page as soon as it saw `ad-end`, so the `1200ms` retry had not
+  logged yet. `agurin` load 4 had `starts:2` (a second ad began), so its
+  final paused state is expected.
+
+### 0.8.24 prewarm wait 800ms
+
+3.5s of the cold 4.3-4.8s hold -> start is the prewarm wait. A cold prewarm
+rarely resolves in that window, so 0.8.24 waits only 800ms and then starts
+`autoplay/android` (360p); the prewarm can still populate the next ad. A
+background run is measuring the new hold -> start and the resume again.

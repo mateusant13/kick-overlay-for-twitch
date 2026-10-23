@@ -899,3 +899,13 @@ background tests run in a separate Edge instance:
   `ko-bg-summary.txt`.
 
 The user's Chrome (port 9222) is not used by the watcher.
+
+### Background run (separate Edge, 2026-10-23)
+
+First real ad captured in the harness, `gragolandia1`:
+- `content-play` 2.281s, first ad playlist 8.005s, `ad-hold` 7.999s,
+  `ad-start` 8.000s
+- `overlay-reveal` 10.460s, reason **`firstframe`** (2.46s after ad-start)
+- overlay quality **1080p**, `Playing`, native hidden
+- the first watcher navigated away at 15s, so `ad-end`/resume was not observed;
+  the second watcher stays on the channel until the pod ends.

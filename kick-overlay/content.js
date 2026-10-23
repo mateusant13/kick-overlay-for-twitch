@@ -285,8 +285,9 @@ const KO = {
   ytState: freshYtState(),
   ytHlsUrl: null,   // last minted HLS manifest url (refreshed under the background cache TTL)
   ytHlsAt: 0,       // epoch ms of the successful mint
-  ytHlsFailed: false, // last mint (or a fatal frame error) failed — fall back to kick
+  ytHlsFailed: false, // last mint (or a fatal frame error) failed - fall back to kick
   ytHlsFailedAt: 0,   // epoch ms of the failure (retry backoff)
+  ytKickFallbackAt: 0, // epoch ms of the last yt->kick fallback probe (5s throttle)
   ytLoadedUrl: null, // url currently handed to the yt frame (re-load on change)
   ytUnlock: false,
   twLive: false,       // sticky: Twitch channel confirmed live on this page
@@ -2039,18 +2040,42 @@ async function probeKickLayer() {
   if (KO.wrap) hideWrap();
 }
 
+// Last-resort handover when YouTube is selected but no usable YouTube source
+// exists. Probe the Kick channel first: KO.kickSlug is either the mapped Kick
+// channel or the Twitch name (same-handle). Never switch to an offline Kick
+// channel - that was the old black-box path. The preference stays 'youtube'
+// in storage; this is a session-only fallback, exactly like the hls failure.
+async function tryKickFallback(reason) {
+  if (KO.host === 'yt' || !KO.kickSlug) return false;
+  const now = Date.now();
+  if (now - (KO.ytKickFallbackAt || 0) < 5000) return false;
+  KO.ytKickFallbackAt = now;
+  const k = await kickPlaybackUrl(KO.kickSlug);
+  if (!k.live || !k.url) return false;
+  diag('yt_fallback', {
+    kick: KO.kickSlug,
+    reason,
+    sameHandle: KO.kickSlug === KO.slug,
+  });
+  KO.player = 'kick';
+  fire(apply);
+  return true;
+}
+
 // YouTube layer decision path (identical logic on both hosts).
 async function probeYtLayer() {
   KO.ytProbeAt = Date.now(); // probe in flight: pin the layer across the mint round-trip
   if (!KO.ytRaw) {
     KO.ytProbeAt = 0;
-    setBadge('YT', '#6b7280'); // no mapping — map the channel in the popup
+    if (await tryKickFallback('no-yt-mapping')) return;
+    setBadge('YT', '#6b7280'); // no mapping - map the channel in the popup
     hideWrapForProbe();
     return;
   }
   await ensureYtId();
   if (!KO.ytId && !ytDirectVideoId(KO.ytRaw)) {
     KO.ytProbeAt = 0;
+    if (await tryKickFallback('yt-unresolved')) return;
     setBadge('YT', '#6b7280'); // could not resolve handle → check the popup value
     hideWrapForProbe();
     return;
@@ -2063,27 +2088,19 @@ async function probeYtLayer() {
   // is disarmed on a yt host / same-handle mapping, where a never-resolving
   // mint used to pin the clock forever through the in-flight stamp).
   const embedStalled = !!(KO.ytEmbedAt && !KO.ytState.ready && Date.now() - KO.ytEmbedAt > YT_EMBED_GRACE);
-  // The HLS layer never initialized: the manifest mint failed (ytHlsFailed —
+  // The HLS layer never initialized: the manifest mint failed (ytHlsFailed -
   // also set by the frame's fatal error handler after its one reload) or the
-  // frame never reached ready within YT_EMBED_GRACE. Hand over to kick ONLY
-  // when a REAL kick mapping exists (kickSlug differs from the twitch slug):
-  // KO.kickSlug always falls back to the twitch slug, so a same-handle
-  // "mapping" would bounce to a kick probe of the same channel that is
-  // offline → wrap hidden → native Twitch visible. The handover must NOT
-  // persist: the user's stored player choice stays 'youtube' (storage keeps
-  // the user's choice; only the in-memory layer switches).
+  // frame never reached ready within YT_EMBED_GRACE. Hand over to Kick only
+  // after proving that Kick is live. tryKickFallback() probes KO.kickSlug,
+  // which may be a real mapping OR the same Twitch name; a same-handle probe
+  // is safe now because it never switches to an offline channel. The handover
+  // must NOT persist: the user's stored player choice stays 'youtube' (only
+  // the in-memory layer switches).
   // Give the bridge's one automatic reload time to recover before treating a
   // fatal hls error as a dead URL (1.5s reload + manifest parse).
   const ytHardFail = !!(KO.ytHlsFailed && Date.now() - (KO.ytHlsFailedAt || 0) > 4000);
-  if (KO.host !== 'yt' && KO.kickSlug && KO.kickSlug !== KO.slug && (ytHardFail || embedStalled)) {
-    diag('yt_fallback', {
-      kick: KO.kickSlug,
-      fail: !!KO.ytHlsFailed,
-      embedMs: KO.ytEmbedAt ? Date.now() - KO.ytEmbedAt : 0,
-    });
-    KO.player = 'kick'; // no saveState() — storage keeps the user's choice
-    fire(apply);
-    return;
+  if (KO.host !== 'yt' && (ytHardFail || embedStalled)) {
+    if (await tryKickFallback(ytHardFail ? 'yt-failed' : 'yt-embed-stalled')) return;
   }
   // The mint refreshed (TTL or post-failure re-mint) while the frame was
   // alive: hand the NEW url to the frame — the old one is dead (stream
@@ -2601,11 +2618,13 @@ function injectStyles() {
     '#ko-track{position:absolute;left:0;right:0;bottom:0;height:4px;border-radius:2px;background:rgba(146,158,166,.5);}' +
     '#ko-seekbar:hover #ko-track{height:6px;bottom:-1px;}' +
     '#ko-fill{position:absolute;left:0;top:0;bottom:0;background:#53fc18;border-radius:2px;}' +
+    '#ko-wrap.ko-yt #ko-fill{background:#ff0000;}' +
     '.ko-prog{position:absolute;left:0;right:0;bottom:0;height:4px;transform-origin:left;}' +
     '#ko-loaded{background:rgba(255,255,255,.5);}' +
     '#ko-loadind{background:rgba(255,255,255,.3);}' +
     '#ko-thumb{position:absolute;top:50%;width:16px;height:16px;border-radius:50%;background:#53fc18;' +
     'transform:translate(-50%,-50%);display:none;}' +
+    '#ko-wrap.ko-yt #ko-thumb{background:#ff0000;}' +
     '#ko-seekbar:hover #ko-thumb,#ko-seekbar.ko-drag #ko-thumb{display:block;}' +
     '#ko-hov{position:absolute;top:-20px;left:0;transform:translateX(-50%);background:rgba(0,0,0,.78);' +
     'border-radius:6px;padding:4px 6px;font-size:12px;font-weight:700;color:#fff;' +

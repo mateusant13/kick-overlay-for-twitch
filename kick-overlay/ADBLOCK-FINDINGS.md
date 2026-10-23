@@ -1038,3 +1038,17 @@ Background Edge 155.0.4283.62, **default autoplay policy** (no
 - The native is rewound and remains visible during those 1.6-2.4s, so a
   midroll continues on buffered content instead of showing a loading box. A
   cold preroll can still show the ad for that window.
+
+### User Chrome 0.8.25 verification (Necros)
+
+The vendor copy was synced to 0.8.25 and the extension reloaded
+(0.8.24 -> 0.8.25). A fresh Chrome window on `Necros` produced a real pod:
+
+- `ad-hold` 65.006s, `ad-rewind` 61.55 -> 56.55 (-5s)
+- `ad-start` 65.013s
+- `overlay-reveal` 67.657s, reason **`firstframe`** (2.644s after ad-start)
+- overlay **1080p Playing**, `muted:true`; no fallback timeout
+- native rewound content covered the 2.644s, so the swap itself did not show
+  a loading box
+- the test window was closed before `ad-end`; the 0.8.24 run covers resume
+  (0/300/1200ms, final native rs=4)

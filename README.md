@@ -4,8 +4,6 @@ Assista **Kick** e **YouTube** dentro do player da Twitch — e deixe os anúnci
 
 A extensão mantém o player nativo da Twitch quando você está na Twitch. O overlay de Kick/YouTube só entra quando você escolhe esses players no popup. O adblock da Twitch funciona em cima do player nativo, sem trocar de site.
 
-> **Versão validada:** `0.8.29` — testada em uso real pelo autor em outubro de 2026.
-
 ---
 
 ## O que ele faz

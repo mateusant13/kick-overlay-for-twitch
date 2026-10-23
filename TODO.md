@@ -326,6 +326,9 @@ Extension fixes in this round:
   `firstframe`, `start -> reveal` **2.444s / 1.874s / 1.618s** (0.8.24 user
   Chrome was 3.206s), `hold -> start` 1-3ms from prewarm, completed pods
   resumed at 0/300/1200ms with final `rs=4`. Badge is click-to-unmute.
+- [x] User Chrome 0.8.25 live verification (`Necros`): `ad-hold` 65.006s,
+  `ad-start` 65.013s, `firstframe` reveal 67.657s (2.644s), overlay 1080p
+  Playing muted, no fallback; the 5s rewind covered the switch.
 - [ ] The true zero-frame swap is still unsolved: a second hls.js player must
   fetch a live segment, so the clean surface appears ~1.6-2.4s after
   `ad-start`. A midroll keeps the rewound native content on screen during that

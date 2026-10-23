@@ -953,3 +953,22 @@ ad trigger. The six real pods:
 rarely resolves in that window, so 0.8.24 waits only 800ms and then starts
 `autoplay/android` (360p); the prewarm can still populate the next ad. A
 background run is measuring the new hold -> start and the resume again.
+
+### 0.8.24 background run (separate Edge, 6 real pods, ~20 min)
+
+| channel | ad-hold | ad-start | hold -> start | reveal | reason | ad-end | quality | final |
+|---|---|---|---|---|---|---|---|---|
+| kittykat02_ | 2.524s | 4.444s | 1.920s | 5.916s | firstframe | 64.644s | 360p | playing, rs=4 |
+| gragolandia1 | 1.849s | 3.764s | 1.915s | 5.874s | firstframe | 61.285s | 360p | playing, rs=4 |
+| agurin | 10.139s | 10.140s | 0.001s (prewarm) | 12.086s | firstframe | 74.138s | 1080p | playing, rs=4 |
+| kittykat02_ | 2.240s | 4.095s | 1.855s | 5.536s | firstframe | - | 360p | still active at 80s cap |
+| agurin | 8.464s | 8.464s | 0.000s (prewarm) | 10.378s | firstframe | 92.433s | 1080p | playing, rs=4 |
+| kittykat02_ | 1.402s | 3.258s | 1.856s | 4.666s | firstframe | 63.991s | 360p | playing, rs=4 |
+
+- 6/6 `firstframe`, 0 fallback timeouts.
+- Cold hold -> start: **1.855-1.920s** (0.8.23 was 4.30-4.83s). Warm
+  prewarm: 0-1ms, 1080p.
+- Every completed pod logged `native-resume` at now/300ms/1200ms with
+  `paused:false`; `ct` advanced and the final native was `rs=4` playing.
+- The `kittykat02_` pod without `ad-end` was still active at the watcher's
+  80s observation cap (frame visible, `stops:0`), not a failure.

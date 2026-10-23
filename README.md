@@ -12,7 +12,7 @@ O overlay é uma **segunda camada de vídeo** que fica por cima do player da Twi
 
 Quando você escolhe **Kick** ou **YouTube** no popup, a extensão troca apenas o vídeo que aparece. Não abre outra aba, não muda de site e não substitui a Twitch.
 
-Não é um overlay de OBS (aquele usado em transmissão). É um player dentro da própria página da Twitch, para você assistir.
+É um player dentro da própria página da Twitch, para você assistir.
 
 ---
 

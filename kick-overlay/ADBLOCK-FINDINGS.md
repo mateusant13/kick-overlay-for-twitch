@@ -909,3 +909,13 @@ First real ad captured in the harness, `gragolandia1`:
 - overlay quality **1080p**, `Playing`, native hidden
 - the first watcher navigated away at 15s, so `ad-end`/resume was not observed;
   the second watcher stays on the channel until the pod ends.
+
+### 0.8.23 cold-preroll source order
+
+The 0.8.22 background run measured `ad-hold` at 1.693s and `ad-start` only at
+11.144s on a cold preroll: the probe tried all web types before
+`autoplay/android`, which is the type that is actually clean during SSAI.
+0.8.23 tries `autoplay/android` first in the ad-start path (360p immediately),
+then falls back to the web/HD types. `switchCleanSource()` still prefers the
+web types if the first source goes ad-only. A background run is measuring the
+new hold -> start delay.

@@ -1329,12 +1329,17 @@
             ['embed', 'web'],
           ]
         : [
-            ['site', 'web'],
-            ['popout', 'web'],
+            // Cold preroll: the web token types are usually already ad-only,
+            // and probing all of them costs ~9s before the overlay can start.
+            // autoplay/android is the measured clean-during-SSAI type; start
+            // with it (360p) so the ad is covered immediately. The overlay can
+            // still switch to a web/HD type if this one goes ad-only.
+            ['autoplay', 'android'],
             ['mobile_web', 'web'],
+            ['popout', 'web'],
+            ['site', 'web'],
             ['mobile', 'android'],
             ['embed', 'web'],
-            ['autoplay', 'android'],
           ];
       for (const [playerType, platform] of types) {
         try {

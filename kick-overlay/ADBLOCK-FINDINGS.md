@@ -998,3 +998,43 @@ for the test (the real user tab is unaffected when focused normally).
 
 The diagnostic `testOverlay()` with a stale playlist URL did not reach
 `Playing`; it is not used by the real ad path.
+
+### 0.8.25 (2026-10-23): muted autoplay + 1-segment live sync
+
+The 5s loading was two separate costs, not one:
+1. `V.play()` was unmuted, so Chrome/Edge autoplay policy parked the clean
+   player in Idle/Buffering until the 2.5s mute retry (or forever in a hidden
+   tab).
+2. hls.js `liveSyncDurationCount:3` waited for three live segments before it
+   would render.
+
+0.8.25 changes:
+- Twitch HLS iframe is built with `&tw=1`; `player-bridge.js` sets
+  `V.muted = true` for that mode and the parent sends `mute:true` before
+  `load`/`play`.
+- Twitch HLS uses `liveSyncDurationCount:1`, `maxBufferLength:15`,
+  `liveBackBufferLength:15`, `startPosition:-1`. The YouTube layer keeps its
+  previous 30s/3-segment config.
+- Badge is clickable and reads `sem anuncio · <quality> · clique para som`
+  while the clean player is muted; the first page gesture also unmutes.
+
+Background Edge 155.0.4283.62, **default autoplay policy** (no
+`--autoplay-policy=no-user-gesture-required`), extension 0.8.25, 3 real pods:
+
+| channel | ad-hold | ad-start | hold -> start | reveal | reason | start -> reveal | quality | muted at reveal | ad-end |
+|---|---|---|---|---|---|---|---|---|---|
+| Necros | 4.990s | 4.991s | 1ms | 7.435s | firstframe | **2.444s** | overlay Playing | yes | 54.943s |
+| Rakin | 7.488s | 7.491s | 3ms | 9.365s | firstframe | **1.874s** | 1080p | yes | 71.105s |
+| Rakin | 11.287s | 11.288s | 1ms | 12.906s | firstframe | **1.618s** | 1080p | yes | >80s cap |
+
+- 3/3 `firstframe`, 0 fallback.
+- Completed pods resumed at now/300/1200ms with `paused:false` and final
+  native `rs=4`.
+- The long Rakin pod was still active at the 80s observation cap
+  (`starts:3`, `stops:0`, frame visible); the extra starts were ad-only source
+  switches, and the final source was 1080p playing.
+- Compare 0.8.24 in the user's Chrome: `ad-start` -> reveal was **3.206s**.
+  0.8.25 measures **1.618-2.444s** for the same segment-fetch step.
+- The native is rewound and remains visible during those 1.6-2.4s, so a
+  midroll continues on buffered content instead of showing a loading box. A
+  cold preroll can still show the ad for that window.

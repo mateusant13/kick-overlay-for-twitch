@@ -7,6 +7,7 @@
 const V = document.getElementById('v');
 const params = new URLSearchParams(location.search);
 const HLS_MODE = params.get('m') === 'hls';
+const TWITCH_HLS = HLS_MODE && params.get('tw') === '1';
 const PLAYER_TOKEN = params.get('token');
 // The embed's parent page. Historically twitch.tv only; since 0.8.2 the
 // same bridge also runs over youtube.com pages (the overlay's YT layer).
@@ -66,6 +67,11 @@ if (HLS_MODE) {
   // 'seek'|'seekToLive'|'getState'} in, {t:'ready'} + ~1/s {t:'st'} + {t:'ev'}
   // out. hls.js plays the innertube hlsManifestUrl; native controls visible.
   V.controls = true; // native controls give the yt layer the embed-era UX
+  // Twitch overlay: start muted so Chrome's autoplay policy cannot park the
+  // clean player in Buffering/Idle while the native ad is still visible.
+  // The badge offers a click-to-unmute after reveal. The YouTube layer keeps
+  // its existing mute handling.
+  if (TWITCH_HLS) V.muted = true;
   // 0.8.16: Twitch SSAI ads can appear on ANY token type. A playlist that
   // looked clean at probe time can turn ad-only on its next refresh (measured
   // on necros: site/web 15 clean segments -> 15 DCM/Amazon segments). Strip
@@ -180,7 +186,25 @@ if (HLS_MODE) {
   // grants - liveBackBufferLength anchors the ~20s seekable window the bar,
   // the "LIVE -Ns" pill and the edge-clamp all promise (0.8.5 left it at the
   // hls.js default, so the window was shorter than the UI implied).
-  const h = new Hls({ maxBufferLength: 30, liveSyncDurationCount: 3, liveBackBufferLength: 20, pLoader: TwitchAdFilterLoader });
+  // The Twitch overlay is a fallback surface, not the primary player: start
+  // closer to the live edge with a smaller buffer so a clean frame appears
+  // in ~1-2s instead of hls.js buffering three live segments (~5s measured).
+  // The YouTube layer keeps its tuned 30s/3-segment live buffer.
+  const hlsConfig = TWITCH_HLS
+    ? {
+        maxBufferLength: 15,
+        liveSyncDurationCount: 1,
+        liveBackBufferLength: 15,
+        startPosition: -1,
+        pLoader: TwitchAdFilterLoader,
+      }
+    : {
+        maxBufferLength: 30,
+        liveSyncDurationCount: 3,
+        liveBackBufferLength: 20,
+        pLoader: TwitchAdFilterLoader,
+      };
+  const h = new Hls(hlsConfig);
   let currentUrl = null;
   let reloaded = false;
   // hls.js can start a DVR playlist at its oldest segment (measured: a 30s

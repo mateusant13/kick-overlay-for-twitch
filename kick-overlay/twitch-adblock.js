@@ -592,7 +592,7 @@
     const frame = document.createElement('iframe');
     frame.id = 'ko-adfix';
     frame.dataset.koToken = token;
-    frame.src = `chrome-extension://${extId}/player.html?m=hls&token=${encodeURIComponent(token)}`;
+    frame.src = `chrome-extension://${extId}/player.html?m=hls&tw=1&token=${encodeURIComponent(token)}`;
     frame.title = 'Clean Twitch stream (ad bypass)';
     frame.setAttribute('allow', 'autoplay; fullscreen; encrypted-media');
     frame.allowFullscreen = true;
@@ -643,7 +643,7 @@
     badge.id = 'ko-adfix-badge';
     badge.textContent = switchSource ? 'sem anúncio · trocando fonte limpa…' : 'sem anúncio · conectando fonte limpa…';
     badge.style.cssText =
-      'position:fixed;z-index:2147483647;pointer-events:none;display:none;' +
+      'position:fixed;z-index:2147483647;pointer-events:auto;cursor:pointer;display:none;' +
       'background:rgba(0,0,0,.72);color:#fff;font:12px/1.4 system-ui,sans-serif;' +
       'padding:3px 7px;border-radius:4px;white-space:nowrap;';
     try { document.body.appendChild(badge); } catch { /* ignore */ }
@@ -661,8 +661,8 @@
       if (m.t === 'ready') {
         overlay.ready = true;
         if (overlay.badge) overlay.badge.textContent = 'sem anúncio · carregando…';
+        overlaySend({ t: 'mute', m: true });
         overlaySend({ t: 'load', url: overlay.url });
-        overlaySend({ t: 'mute', m: false });
         overlaySend({ t: 'play' });
         return;
       }
@@ -714,7 +714,12 @@
           // The clean player is actually running: now it is safe to cover the
           // native video. Before this point the native stays visible.
           revealOverlay('playing');
-          if (overlay.badge) overlay.badge.textContent = 'sem anúncio · qualidade reduzida';
+          if (overlay.badge) {
+            const qn = m.st.q && m.st.q.name ? m.st.q.name : 'qualidade reduzida';
+            overlay.badge.textContent = m.st.muted
+              ? `sem anúncio · ${qn} · clique para som`
+              : `sem anúncio · ${qn}`;
+          }
           bypassStats.playing++;
           if (bypassStats.last?.type !== 'playing') {
             bypassStats.last = { type: 'playing', q: m.st.q, at: Date.now() };
@@ -741,6 +746,7 @@
       overlay.unmuteHandler = null;
     };
     try { document.addEventListener('pointerdown', overlay.unmuteHandler, true); } catch { /* ignore */ }
+    try { badge.addEventListener('click', overlay.unmuteHandler); } catch { /* ignore */ }
 
     // Watchdog: the clean master can still go ad-only on its media playlist.
     // The iframe reports that, but if hls.js simply never reaches Playing we
@@ -774,8 +780,8 @@
     // iframe. Sending here too avoids a race on warm starts.
     setTimeout(() => {
       if (!overlay.frame) return;
+      overlaySend({ t: 'mute', m: true });
       overlaySend({ t: 'load', url: overlay.url });
-      overlaySend({ t: 'mute', m: false });
       overlaySend({ t: 'play' });
     }, 400);
   }

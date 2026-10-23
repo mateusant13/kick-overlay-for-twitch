@@ -310,8 +310,9 @@ Extension fixes in this round:
 - [x] Probe `autoplay/android` first on a cold preroll: 0.8.23 cut cold
   hold -> start from 9.4s to 4.30-4.83s (the remaining 3.5s was the prewarm
   wait).
-- [ ] Validate 0.8.24 prewarm wait 800ms (background `ko-bg-results4.jsonl`);
-  expected cold hold -> start ~1.6-2.0s.
+- [x] Validate 0.8.24 prewarm wait 800ms (background `ko-bg-results4.jsonl`):
+  6 real pods, 6/6 firstframe, cold hold -> start 1.855-1.920s, prewarm hits
+  0-1ms at 1080p, resume 0/300/1200ms all paused:false with rs=4.
 - [ ] The true no-black/no-freeze swap is still unsolved: hls.js does not
   buffer while the native video is visible; the current best is a short
   native freeze/loading gap, then the clean 360p stream.

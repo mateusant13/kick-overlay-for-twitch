@@ -972,3 +972,10 @@ background run is measuring the new hold -> start and the resume again.
   `paused:false`; `ct` advanced and the final native was `rs=4` playing.
 - The `kittykat02_` pod without `ad-end` was still active at the watcher's
   80s observation cap (frame visible, `stops:0`), not a failure.
+
+Seventh pod completed after the table: `hiyo` hold 2.005s, start 3.817s
+(1.812s), reveal 5.107s (`firstframe`), ad-end 51.491s, 360p. Resume
+now/300/1200ms all `paused:false`, ct 0.1 -> 0.7; final native `rs=4` but
+Twitch reported paused (cold-start re-pause, same as the earlier `hiyo`
+run). Watcher4 final: **runs=30 withAd=7 firstframe=7 fallback=0
+resumeStillPaused=0**.

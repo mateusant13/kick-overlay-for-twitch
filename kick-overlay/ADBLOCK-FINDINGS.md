@@ -1253,3 +1253,25 @@ The extension in the user profile was reloaded to 0.8.29. Existing tabs still
 need one refresh to replace the old content script; until then they keep 0.8.28
 behavior. HD *during* an ad is still only possible with the owner's VPS egress
 in an ad-free region; 360p clean is the accepted no-VPS fallback.
+
+### Owner validation (2026-10-23): accepted, 0.8.29
+
+The owner used 0.8.29 on a real live and reported:
+
+> "testei. parece que funcionou muito bem."
+
+This closes the real-ad validation item that had been open since 0.8.26. The
+previously reported "unmuted but silent after the ad" failure did not reproduce:
+0.8.29 restores the captured `muted` + `volume` pair. No new freeze, rewind, or
+doubled-audio report came with this validation.
+
+Accepted behavior, no longer considered a defect:
+
+- during a live ad pod the clean overlay is 360p; the native player is back at
+  the user-selected quality (up to 1080p) when the pod ends;
+- a cold preroll can briefly show the muted native ad while the clean player
+  reaches a healthy `Playing`; a frozen clean frame is deliberately avoided.
+
+Version 0.8.29 is the validated release. Any future change to
+`twitch-adblock.js` should re-run the Edge scenarios in this section before it
+is called stable.

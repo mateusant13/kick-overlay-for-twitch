@@ -1,6 +1,6 @@
 # Kick & YouTube Overlay for Twitch
 
-Assista **Kick** e **YouTube** dentro do player da Twitch — e deixe os anúncios da Twitch fora do caminho.
+Assista **Kick** e **YouTube** dentro do player da Twitch - e deixe os anúncios da Twitch fora do caminho.
 
 A extensão mantém o player nativo da Twitch quando você está na Twitch. O overlay de Kick/YouTube só entra quando você escolhe esses players no popup. O adblock da Twitch funciona em cima do player nativo, sem trocar de site.
 
@@ -8,13 +8,13 @@ A extensão mantém o player nativo da Twitch quando você está na Twitch. O ov
 
 ## O que ele faz
 
-- **Overlay de Kick** — o canal da Kick toca dentro da página da Twitch, com os controles do projeto.
-- **Overlay de YouTube** — funciona com URL de live/vídeo, `@handle` ou ID `UC...`.
-- **Adblock para lives da Twitch** — reescreve o token do player, remove os blocos de anúncio dos playlists e, quando o anúncio já veio colado no stream, cobre o player com um frame limpo em 360p até o intervalo acabar.
-- **Adblock para VODs da Twitch** — bloqueia as requisições de anúncio CSAI dos vídeos sob demanda.
-- **Sem trocar o player fora do anúncio** — quando não há anúncio, quem manda é o player nativo da Twitch, na qualidade que você escolheu (até 1080p).
-- **Áudio de volta sozinho** — o estado de mudo e o volume são salvos antes do anúncio e restaurados depois. Você não precisa clicar no ícone de volume.
-- **Sem rewind e sem áudio duplicado** — o standby fica escondido e mudo; o player nativo é silenciado enquanto o frame limpo está na frente.
+- **Overlay de Kick** - o canal da Kick toca dentro da página da Twitch, com os controles do projeto.
+- **Overlay de YouTube** - funciona com URL de live/vídeo, `@handle` ou ID `UC...`.
+- **Adblock para lives da Twitch** - reescreve o token do player, remove os blocos de anúncio dos playlists e, quando o anúncio já veio colado no stream, cobre o player com um frame limpo em 360p até o intervalo acabar.
+- **Adblock para VODs da Twitch** - bloqueia as requisições de anúncio CSAI dos vídeos sob demanda.
+- **Sem trocar o player fora do anúncio** - quando não há anúncio, quem manda é o player nativo da Twitch, na qualidade que você escolheu (até 1080p).
+- **Áudio de volta sozinho** - o estado de mudo e o volume são salvos antes do anúncio e restaurados depois. Você não precisa clicar no ícone de volume.
+- **Sem rewind e sem áudio duplicado** - o standby fica escondido e mudo; o player nativo é silenciado enquanto o frame limpo está na frente.
 
 ---
 
@@ -28,7 +28,7 @@ No GitHub, clique no botão verde **Code** (ou **Código**) → **Download ZIP**
 
 Abra o `.zip` e arraste a pasta de dentro para a **Área de Trabalho** (ou outro lugar que você não vá apagar).
 
-A pasta da extensão é a **`kick-overlay`** — a que tem o arquivo `manifest.json` dentro. Não é a pasta raiz do projeto.
+A pasta da extensão é a **`kick-overlay`** - a que tem o arquivo `manifest.json` dentro. Não é a pasta raiz do projeto.
 
 ### 3. Abra a página de extensões do navegador
 
@@ -94,7 +94,7 @@ A extensão faz três coisas, nesta ordem:
 
 Durante o intervalo, o frame limpo é **360p**. Fora do anúncio, o player nativo volta para a qualidade que você escolheu (até 1080p).
 
-Isso é de propósito: em intervalos longos, a fonte em HD pode virar “só anúncio”. Foi isso que já causou tela preta e travamento. Por isso, durante o intervalo, o frame limpo fica em 360p — e o player nativo volta à sua qualidade quando o intervalo termina.
+Isso é de propósito: em intervalos longos, a fonte em HD pode virar “só anúncio”. Foi isso que já causou tela preta e travamento. Por isso, durante o intervalo, o frame limpo fica em 360p - e o player nativo volta à sua qualidade quando o intervalo termina.
 
 ---
 

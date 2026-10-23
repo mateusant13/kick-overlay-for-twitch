@@ -66,7 +66,7 @@ Clique no ícone da extensão na barra do navegador e deixe-o fixado. Depois abr
 
    | Player | O que faz |
    |--------|-----------|
-   | **Kick** | Usa o mesmo nome do canal da Twitch como slug da Kick (dá para editar). |
+   | **Kick** | Usa o mesmo nome da Twitch como canal da Kick (dá para editar). |
    | **YouTube** | Aceita URL de live/vídeo, `@handle` ou ID `UC...`. |
    | **Twitch** | Mantém o player nativo; o adblock continua ativo. |
 
@@ -106,7 +106,7 @@ Isso é de propósito: em intervalos longos, a fonte em HD pode virar “só an�
 | Fiquei sem áudio depois do anúncio | Confirme que está na **0.8.29** ou mais novo e dê **F5**. A versão 0.8.29 restaura volume + mudo; antes disso o volume ficava em 0. |
 | Apareceu um anúncio | No anúncio antes da live, o anúncio nativo pode aparecer **mudo** por alguns segundos enquanto o frame limpo fica pronto. Isso é preferível a uma tela preta. Se acontecer no meio de um intervalo longo, verifique se o toggle **Twitch adblock** está ligado. |
 | Tela preta ou player travado | A extensão tenta voltar para o player nativo quando o frame limpo não chega a `Playing`. Se persistir, dê **F5** e desligue o overlay para isolar o problema. |
-| Kick ou YouTube não aparece | Confira se o canal está ao vivo e se o slug/URL está certo. O mapeamento é por canal e fica salvo. |
+| Kick ou YouTube não aparece | Confira se o canal está ao vivo e se o nome/URL está certo. O mapeamento é por canal e fica salvo. |
 | Quero conferir a versão | Abra `chrome://extensions` e veja o número embaixo do nome. A versão validada é **0.8.29**. |
 
 ---

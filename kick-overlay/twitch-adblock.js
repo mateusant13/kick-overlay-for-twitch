@@ -174,6 +174,8 @@
     playing: false,
     switchTries: 0,
     watchdogTimer: 0,
+    stallTimer: 0,
+    switchPrev: null,
     badge: null,
     unmuteHandler: null,
     onMessage: null,
@@ -347,7 +349,15 @@
 
   function hideNativeVideos() {
     for (const v of document.querySelectorAll('video')) {
-      if (overlay.hiddenVideos.some((x) => x.el === v)) continue;
+      const known = overlay.hiddenVideos.find((x) => x.el === v);
+      if (known) {
+        // Twitch can unmute/re-show a video after we hid it (measured as
+        // doubled audio ~1.5-2s behind the clean overlay). Re-apply on every
+        // position tick instead of trusting the first hide.
+        try { v.style.visibility = 'hidden'; } catch { /* ignore */ }
+        try { v.muted = true; } catch { /* ignore */ }
+        continue;
+      }
       overlay.hiddenVideos.push({ el: v, visibility: v.style.visibility, muted: v.muted });
       try { v.style.visibility = 'hidden'; } catch { /* ignore */ }
       // Mute every native video, not just the main one: a PBP/ad video can
@@ -460,6 +470,31 @@
     });
   }
 
+  function clearOverlayStall() {
+    if (!overlay.stallTimer) return;
+    try { clearTimeout(overlay.stallTimer); } catch { /* ignore */ }
+    overlay.stallTimer = 0;
+  }
+
+  function scheduleOverlayStall(kind, ms = 2500) {
+    if (!overlay.frame || overlay.standby) return;
+    // One timer per overlay. A healthy Playing/rs>=3 message clears it; if the
+    // clean player stays stalled we give up and restore the native surface
+    // instead of leaving a frozen frame over a hidden native player.
+    if (overlay.stallTimer) return;
+    overlay.stallTimer = setTimeout(() => {
+      overlay.stallTimer = 0;
+      if (!overlay.frame || overlay.standby) return;
+      adLog('overlay-stall-stop', {
+        kind: String(kind || ''),
+        revealed: overlay.revealed,
+        playing: overlay.playing,
+        switchPrev: !!overlay.switchPrev,
+      });
+      stopAdOverlay('clean-stall');
+    }, ms);
+  }
+
   function stopAdOverlay(reason) {
     // A standby that was never adopted is invisible content behind the native
     // player. Stopping it must not post overlay-stop (that clears the worker's
@@ -471,6 +506,7 @@
     overlay.adEndTimer = 0;
     try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
     overlay.watchdogTimer = 0;
+    clearOverlayStall();
     if (overlay.hideTimer) {
       try { clearTimeout(overlay.hideTimer); } catch { /* ignore */ }
       overlay.hideTimer = 0;
@@ -638,6 +674,9 @@
     if (!AD_OVERLAY_ENABLED) return;
     if (!url) return;
     const prevWasMuted = overlay.wasMuted;
+    // A stall timer belongs to the previous frame/source. Starting a new
+    // overlay/switch invalidates it; the new frame gets its own.
+    clearOverlayStall();
     if (document.documentElement.getAttribute('data-ko-adblock') === '0') {
       stopAdOverlay('disabled');
       return;
@@ -778,12 +817,18 @@
       try { clearTimeout(overlay.hideTimer); } catch { /* ignore */ }
       overlay.hideTimer = 0;
     }
-    // Bounded fallback: if hls.js cannot start while the native video is
-    // visible, reveal anyway after 5s. A standby must never reveal itself:
-    // it is invisible content, not an ad, so it has no fallback timer.
+    // Bounded fallback: if hls.js cannot reach a healthy Playing state, do not
+    // reveal a black/frozen frame. Restore the native player instead. (A
+    // standby must never reveal itself: it is invisible content, not an ad, so
+    // it has no fallback timer.)
     if (!standby) {
       overlay.hideTimer = setTimeout(() => {
         if (!overlay.frame || overlay.revealed) return;
+        if (!overlay.playing) {
+          adLog('overlay-no-playing', { reason: 'fallback-timeout' });
+          stopAdOverlay('no-playing');
+          return;
+        }
         revealOverlay('fallback-timeout');
       }, 5000);
     }
@@ -820,6 +865,13 @@
       if (m.t === 'ev' && m.e === 'hls') {
         bypassStats.lastHls = { d: m.d, fatal: m.fatal, url: m.url, at: Date.now() };
         if (m.fatal) bypassStats.errors++;
+        // A visible clean player that stalls must not freeze forever over the
+        // hidden native video. Give it a short chance to recover, then restore
+        // the native surface. Standbys are ignored: they are invisible and
+        // have their own timeout/probe path.
+        if (!overlay.standby && m.d === 'bufferStalledError') {
+          scheduleOverlayStall('bufferStalledError');
+        }
         return;
       }
       if (m.t === 'ev' && m.e === 'adstrip') {
@@ -846,6 +898,10 @@
           return;
         }
         if (overlay.badge) overlay.badge.textContent = 'sem anúncio · trocando fonte limpa…';
+        // The current clean source is ad-only. If it is already visible and
+        // freezes, the stall timer restores the native player instead of
+        // leaving a frozen frame. The switch usually finishes first.
+        if (overlay.revealed) scheduleOverlayStall('ad-only', 4000);
         try {
           bypassChannel?.postMessage({ type: 'need-source', page: pageId, channel: overlay.channel || null });
         } catch {
@@ -864,22 +920,42 @@
         return;
       }
       if (m.t === 'ev' && m.e === 'firstframe') {
-        // A standby stays hidden: first frame only marks it ready. During an
-        // ad (adActive) the same frame is used to reveal the clean picture.
+        // A standby stays hidden. Do not mark it ready from the first decoded
+        // frame alone: hls.js can emit firstframe while still stalled at rs=2.
+        // Readiness comes from a healthy `Playing` state below.
         if (overlay.standby && !overlay.adActive) {
-          if (!overlay.playing) bypassStats.standbyReady++;
-          overlay.playing = true;
           try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
           overlay.watchdogTimer = 0;
           return;
         }
-        // The clean player has produced its first frame. Swap now: this is the
-        // seam where the native frame is replaced by the clean frame.
+        // The clean player has produced its first frame, but it may not be
+        // moving yet (`playing:false` was measured on the Necros source switch).
+        // Revealing that frame hides the native player and leaves the user
+        // with a frozen picture. Wait for Playing instead; the native/old clean
+        // frame stays visible in the meantime.
+        if (!overlay.playing) {
+          adLog('firstframe-not-playing', { rs: 0 });
+          scheduleOverlayStall('firstframe-not-playing');
+          return;
+        }
         revealOverlay('firstframe');
         return;
       }
       if (m.t === 'st' && m.st) {
         if (m.st.state === 'Playing') {
+          // HAVE_FUTURE_DATA is the minimum that can be revealed without
+          // freezing. A stalled hls.js still reports state=Playing with rs=2
+          // and buffered=0 (measured on the Necros long pod).
+          const healthy = typeof m.st.rs !== 'number' || m.st.rs >= 3;
+          if (!healthy) {
+            if (!overlay.lastUnhealthyLogAt || Date.now() - overlay.lastUnhealthyLogAt > 2000) {
+              overlay.lastUnhealthyLogAt = Date.now();
+              adLog('playing-not-healthy', { rs: m.st.rs, buffered: m.st.buffered, pos: m.st.pos });
+            }
+            scheduleOverlayStall('rs' + m.st.rs);
+            return;
+          }
+          clearOverlayStall();
           const wasPlaying = overlay.playing;
           overlay.playing = true;
           try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
@@ -917,6 +993,11 @@
     // is covered by the iframe, so Twitch's own volume control is not
     // reachable while the fallback is active.
     overlay.unmuteHandler = () => {
+      // Never unmute a hidden standby or a clean player that has not been
+      // revealed. The standby runs 1.5-2s behind the native; unmuting it on a
+      // click produced doubled/echoed audio (user report). Keep the handler
+      // installed so the first click after reveal still unmutes.
+      if (overlay.standby || !overlay.revealed) return;
       overlaySend({ t: 'mute', m: false });
       overlaySend({ t: 'play' });
       if (overlay.badge) overlay.badge.textContent = 'sem anúncio · qualidade reduzida';
@@ -1005,13 +1086,20 @@
           return;
         }
         if (overlay.held) return;
-        // Hybrid step 1: rewind before muting. The native replays buffered
-        // content, giving the clean overlay time to start without a black
-        // frame. One rewind per ad.
+        // Warm standby: do NOT rewind the native. 0.8.26 rewound 5s here and
+        // the user saw the live jump ~4s backwards right before the swap. The
+        // standby is already at the live edge; the swap itself is 1-2ms.
+        // The rewind remains only for the cold path, where the native has to
+        // cover the hls.js segment fetch.
+        const warmStandby = !!(overlay.standby && overlay.playing);
         if (!overlay.rewound) {
           overlay.rewound = true;
-          const rew = rewindNative(AD_REWIND_SEC);
-          adLog('ad-rewind', { seconds: AD_REWIND_SEC, result: rew });
+          if (warmStandby) {
+            adLog('ad-rewind-skip', { reason: 'standby', seconds: AD_REWIND_SEC });
+          } else {
+            const rew = rewindNative(AD_REWIND_SEC);
+            adLog('ad-rewind', { seconds: AD_REWIND_SEC, result: rew });
+          }
         }
         const v = mainVideo();
         if (!v) return;

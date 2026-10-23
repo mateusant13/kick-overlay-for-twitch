@@ -1,6 +1,6 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.26**, persistent profile
+Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.28**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
 CDP port 9222 (user Chrome) and 9335 (separate Edge test harness). Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
@@ -1132,3 +1132,73 @@ Limitations / open issues:
   switch-frame fixes are covered synthetically.
 - HD remains limited by the clean token; an own VPS in an ad-free region is
   still required for reliable 1080p (see `ADBLOCK-HD-RESEARCH.md`).
+
+### 0.8.27 / 0.8.28 (2026-10-23): freeze + duplicated-audio fixes
+
+A real `Necros` watch on 0.8.26 reproduced two failures the earlier tests did
+not cover:
+
+1. **Backward jump + freeze.** At ~1:50 the ad path ran `ad-rewind`
+   `86.76 -> 81.76` (5s), then revealed the warm standby in **3ms**. The clean
+   token later went ad-only (`adOnly`), the worker sent `ad-start switch:true`,
+   and the replacement iframe emitted `overlay-reveal reason=firstframe
+   playing:false`. It was stalled (`bufferStalledError`, `rs=2`, `buffered=0`)
+   while the native video was hidden/muted, so the user saw a frozen frame at
+   the point where the ad had started.
+2. **Doubled audio, ~1.5-2s apart.** The pointerdown unmute handler was
+   installed for the hidden standby too. Any click on the Twitch page sent
+   `mute:false` to the hidden 1%-opacity player, which runs ~1.5-2s behind the
+   native. Re-muting was also missing: `hideNativeVideos()` skipped videos it
+   had already stored, so if Twitch unmuted a hidden native video again the
+   native audio came back behind the clean overlay.
+
+0.8.27/0.8.28 changes:
+
+- **No rewind on a warm standby.** `ad-hold` logs `ad-rewind-skip`; the 5s
+  rewind remains only for the cold path. This removes the visible backward
+  jump on the 1-2ms swap path.
+- **Never reveal a frame that is not moving.** `firstframe` no longer reveals if
+  `overlay.playing` is false. `Playing` is accepted only with `rs>=3`
+  (`playing-not-healthy` is logged otherwise), and the 5s fallback now stops and
+  restores the native player (`overlay-no-playing`) instead of revealing a
+  black/frozen frame.
+- **Stall recovery.** A visible clean player that reports
+  `bufferStalledError`, stays at `rs<3`, goes ad-only, or starts with
+  `firstframe playing:false` gets a 2.5-4s grace timer. If it does not recover,
+  `overlay-stall-stop` stops the overlay and restores the native surface. A
+  healthy `Playing` clears the timer.
+- **Doubled audio.** The page gesture handler returns early unless
+  `overlay.revealed && !overlay.standby`; a hidden/unrevealed player can never
+  be unmuted by a click. The handler stays installed so the next click after
+  reveal still unmutes the clean audio.
+- **Native re-mute/re-hide every tick.** `hideNativeVideos()` now re-applies
+  `visibility:hidden` and `muted=true` to already-known videos on each 500ms
+  position tick, instead of trusting the first hide. This covers Twitch
+  un-muting a hidden native video.
+- **Source-switch fallback frame** (0.8.26) is retained: the old visible clean
+  frame stays underneath until the replacement reaches a healthy `Playing`.
+
+Edge 0.8.28 validation (separate profile, `--mute-audio`):
+
+- standby 1080p, `lastMsg.st.muted:true`; a synthetic `pointerdown` left it
+  muted (no hidden-player unmute);
+- `ad-hold` revealed in **35ms** (10ms poll); `ad-rewind`/`ad-rewind-skip`
+  showed no native rewind on the warm path;
+- after revealing, manually setting the native `video.muted=false` was
+  corrected back to `muted:true` within 800ms (re-mute tick);
+- a forced source switch kept two iframes while the new source buffered
+  (`old opacity:1 z=...646`, new `0.01 z=...647`); the old frame remained until
+  the new `Playing` (`rs=4`), then the old was removed;
+- `ad-end` restored the native, started a new standby, and left native
+  `muted` at its original state.
+
+The user's Chrome extension was reloaded to 0.8.28; an existing tab keeps the
+old content script until it is refreshed. A temporary page-side mute guard was
+used on the live tab (mutes hidden iframes and native videos while an overlay is
+visible) so the doubled audio stops immediately without forcing a reload.
+
+Open limitation: real-ad end-to-end with 0.8.28 has not been re-observed; the
+0.8.26 real pod remains the timing proof, and the freeze/audio fixes are covered
+by the Edge scenarios above plus the incident log. Cold-start ads can still show
+the native ad (muted) while waiting for a healthy clean `Playing`; that is the
+deliberate alternative to a frozen clean frame.

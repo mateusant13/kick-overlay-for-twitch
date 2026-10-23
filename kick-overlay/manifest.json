@@ -1,7 +1,7 @@
 {
   "name": "Kick & YouTube Overlay for Twitch",
   "description": "Kick & YouTube overlay for Twitch, plus a Twitch adblock: optional HTTP proxy for ad-free HD playlists, VOD CSAI blocking, and a reduced-quality clean-stream fallback when a live ad is already stitched.",
-  "version": "0.8.26",
+  "version": "0.8.28",
   "manifest_version": 3,
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"

@@ -369,3 +369,38 @@ Extension fixes in this round:
 - [ ] Standby runs continuously at up to 1080p (owner approved). Keep
   `AD_STANDBY_ENABLED=false` as the low-bandwidth fallback.
 - [ ] HD proxy still needs an own VPS in an ad-free region.
+
+## 0.8.27-0.8.28 (2026-10-23, freeze + doubled-audio fixes)
+
+Real `Necros` report on 0.8.26: 5s backward jump, then a clean-source switch
+revealed `firstframe playing:false`; the replacement stalled (`rs=2`,
+`bufferStalledError`) over the hidden native player and froze. Doubled audio
+~1.5-2s behind came from the hidden standby being unmuted by a pointerdown and
+from native videos being re-unmuted after `hideNativeVideos()` had stored them.
+
+- [x] Skip the 5s native rewind when a warm standby is playing
+  (`ad-rewind-skip`); keep it only for the cold path.
+- [x] Do not reveal on `firstframe` unless `overlay.playing`; accept `Playing`
+  only with `rs>=3`. Log `firstframe-not-playing` / `playing-not-healthy`.
+- [x] Fallback no longer reveals a dead frame: `overlay-no-playing` stops and
+  restores native.
+- [x] Stall recovery: `bufferStalledError`, persistent `rs<3`, `ad-only`, or
+  `firstframe playing:false` start a 2.5-4s timer; `overlay-stall-stop` restores
+  native if no healthy Playing clears it.
+- [x] Unmute gesture ignores `overlay.standby` and `!overlay.revealed`; hidden
+  standby can no longer be unmuted by clicking the page.
+- [x] `hideNativeVideos()` re-applies hidden+muted on every position tick, so
+  Twitch un-muting a native video is corrected.
+- [x] Edge 0.8.28: pointerdown left standby muted; native manually unmuted was
+  re-muted within 800ms; warm reveal 35ms; no `ad-rewind`; source switch kept
+  the old visible frame until the new source reached `Playing`; ad-end
+  restored native and started a new standby.
+- [x] Vendor synced to 0.8.28 and extension reloaded (0.8.26 -> 0.8.28).
+  Existing tabs need a refresh; a temporary page-side mute guard was applied to
+  the live tab so the echo stops immediately.
+- [ ] Re-observe a real ad with 0.8.28; the 0.8.26 real pod is still the timing
+  proof.
+- [ ] Cold-start ads can show the native muted ad while waiting for a healthy
+  clean `Playing`; this is preferred over a frozen clean frame.
+- [ ] Long pods can still trigger ad-only source switches; stall recovery now
+  bounds the failure to a few seconds instead of a permanent freeze.

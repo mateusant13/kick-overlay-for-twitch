@@ -1,6 +1,6 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.29**, persistent profile
+Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.30**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
 CDP port 9222 (user Chrome) and 9335 (separate Edge test harness). Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
@@ -1272,6 +1272,13 @@ Accepted behavior, no longer considered a defect:
 - a cold preroll can briefly show the muted native ad while the clean player
   reaches a healthy `Playing`; a frozen clean frame is deliberately avoided.
 
-Version 0.8.29 is the validated release. Any future change to
+Version 0.8.29 is the validated adblock release. Any future change to
 `twitch-adblock.js` should re-run the Edge scenarios in this section before it
 is called stable.
+
+## 0.8.30 (2026-10-23): overlay-only follow-up
+
+0.8.30 does not change the adblock path. It fixes the YouTube mode seek bar
+color (YouTube red; Kick stays green) and adds the YouTube-to-Kick fallback
+when a selected YouTube source is missing or not live. The 0.8.29 adblock
+validation above still applies.

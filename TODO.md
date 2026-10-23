@@ -1,7 +1,8 @@
 # TODO - Kick & YouTube Overlay for Twitch
 
 **Status: COMPLETE.** Version **0.8.29** was validated by the owner in real use
-on 2026-10-23. There are no open items.
+on 2026-10-23. Version **0.8.30** adds two follow-up fixes for YouTube mode and
+the YouTube-to-Kick fallback. There are no open items.
 
 The detailed evidence for every fix is in
 `kick-overlay/ADBLOCK-FINDINGS.md`. Older revisions of this TODO, including the
@@ -23,6 +24,24 @@ investigations that led to 0.8.8-0.8.29, remain in the git history.
   source switch during a long pod.
 - [x] Vendor copy synced to 0.8.29; extension reloaded; existing tabs pick it up
   after one refresh.
+
+## Follow-up 0.8.30 (2026-10-23)
+
+- [x] YouTube mode now uses YouTube red for the seek fill and thumb. Kick keeps
+  its green. The green bar was the remaining Kick visual while YouTube was
+  selected.
+- [x] If YouTube is selected but no usable source exists, the overlay probes
+  Kick before giving up. It switches only when Kick is live, so an offline
+  same-name channel cannot create a black frame.
+- [x] The fallback uses the mapped Kick channel, or the same Twitch name when
+  there is no mapping. The stored preference stays YouTube; the fallback is
+  session-only and the next page load tries YouTube again.
+- [x] README now explains same-name multi stream, the YouTube-to-Kick fallback,
+  the bar colors, and the cold-open ad path. It also states that the page is not
+  auto-refreshed.
+- [x] Manifest and vendor copy synced to 0.8.30. Edge tests: `rodil` rendered
+  YouTube at 1080p with a red bar; `FaturetoSL` with no YouTube mapping fell
+  back to a live Kick player.
 
 ## Delivered
 

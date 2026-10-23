@@ -131,6 +131,11 @@
   // visible and never lets the ad play. The native player is restored after
   // two clean playlists.
   const AD_OVERLAY_ENABLED = true;
+  // Hybrid: on the first ad signal, jump the native player back this many
+  // seconds. 5s = the user's observed ~4s content grace + 1s safety. The real
+  // value is measured from ko.adlog (`ad-rewind` / `content-play`); this is
+  // only the starting point.
+  const AD_REWIND_SEC = 5;
   const bypassStats = { starts: 0, stops: 0, errors: 0, playing: 0, last: null };
   stats.adBypass = bypassStats;
   const overlay = {
@@ -157,6 +162,15 @@
     badge: null,
     unmuteHandler: null,
     onMessage: null,
+    // Hybrid ad handling: on the first ad signal, rewind the native player a
+    // few seconds so it replays already-buffered content while the clean
+    // overlay starts. The overlay stays transparent and the native stays
+    // visible until the overlay actually reports Playing (or the fallback
+    // timer fires), which avoids the black frame.
+    rewound: false,
+    revealed: false,
+    nativeHidden: false,
+    hideTimer: 0,
   };
 
   function mainVideo() {
@@ -177,6 +191,39 @@
     return best;
   }
 
+  // Rewind live by a few seconds so the native player replays already-buffered
+  // content instead of immediately reaching the stitched ad. Twitch's live
+  // video reports duration=Infinity but currentTime is seekable in the DVR
+  // window; seekable.start(0) is 0, so `currentTime - seconds` is the target.
+  function rewindNative(seconds) {
+    const v = mainVideo();
+    if (!v) return null;
+    if (v.paused || v.readyState < 2) return { skipped: 'not-playing', rs: v.readyState, paused: v.paused };
+    const before = v.currentTime;
+    let target = before - seconds;
+    try {
+      const s = v.seekable;
+      if (s && s.length) {
+        const start = s.start(0);
+        if (Number.isFinite(start)) target = Math.max(start, target);
+      }
+    } catch {
+      /* fall back to before-seconds */
+    }
+    if (!(target < before - 0.5)) return { skipped: 'no-window', before: +before.toFixed(2), target: +target.toFixed(2) };
+    try {
+      v.currentTime = target;
+      return { before: +before.toFixed(2), target: +target.toFixed(2), delta: +(before - target).toFixed(2) };
+    } catch {
+      return { skipped: 'seek-failed', before: +before.toFixed(2), target: +target.toFixed(2) };
+    }
+  }
+  stats.rewindNative = rewindNative;
+  // Diagnostic only: start the clean overlay against an arbitrary HLS URL so
+  // the surface-swap (native visible -> firstframe -> hide native) can be
+  // tested without waiting for a real ad. Not used by the ad path.
+  stats.testOverlay = (url) => startAdOverlay(url, 'test', false);
+
   function positionOverlay() {
     if (!overlay.frame) return;
     const v = overlay.video && overlay.video.isConnected ? overlay.video : mainVideo();
@@ -194,7 +241,9 @@
     }
     overlay.frame.style.display = 'block';
     if (overlay.badge) {
-      overlay.badge.style.display = 'block';
+      // Keep the badge hidden while the native player is still the visible
+      // surface; it appears together with the clean player.
+      overlay.badge.style.display = overlay.revealed ? 'block' : 'none';
       overlay.badge.style.left = `${Math.round(r.left) + 12}px`;
       overlay.badge.style.top = `${Math.round(r.top) + 12}px`;
     }
@@ -226,7 +275,10 @@
       overlay.frame.style.right = 'auto';
       overlay.frame.style.bottom = 'auto';
     }
-    hideNativeVideos(); // Twitch may recreate a video while the ad runs
+    // Hide native videos only after the clean player has been revealed; while
+    // it is transparent the native player is the visible surface. After the
+    // reveal, keep hiding any video Twitch recreates during the ad.
+    if (overlay.revealed) hideNativeVideos();
   }
 
   function overlaySend(msg) {
@@ -328,6 +380,29 @@
     overlay.held = false;
   }
 
+  // Hiding the native video does not normally pause it, but Twitch may pause
+  // when the element is occluded, and on a cold preroll the native was never
+  // playing at all. Retry the resume a few times, then click Twitch's own
+  // play button as a last resort (measured in the background Edge run: the
+  // native stayed paused after ad-end).
+  function resumeNative(v, tag) {
+    if (!v || !v.isConnected) return;
+    try {
+      if (v.paused) {
+        const p = v.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch {
+      /* ignore */
+    }
+    adLog('native-resume', {
+      tag,
+      paused: v.paused,
+      ct: +v.currentTime.toFixed(1),
+      rs: v.readyState,
+    });
+  }
+
   function stopAdOverlay(reason) {
     try { clearTimeout(overlay.extTimer); } catch { /* ignore */ }
     overlay.extTimer = 0;
@@ -335,6 +410,10 @@
     overlay.adEndTimer = 0;
     try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
     overlay.watchdogTimer = 0;
+    if (overlay.hideTimer) {
+      try { clearTimeout(overlay.hideTimer); } catch { /* ignore */ }
+      overlay.hideTimer = 0;
+    }
     if (overlay.held) restoreHeldMute();
     if (!overlay.frame) {
       // Even without a frame, a badge/unmute handler can be left over from a
@@ -346,6 +425,9 @@
       }
       overlay.playing = false;
       overlay.switchTries = 0;
+      overlay.rewound = false;
+      overlay.revealed = false;
+      overlay.nativeHidden = false;
       return;
     }
     try { clearInterval(overlay.positionTimer); } catch { /* ignore */ }
@@ -367,9 +449,27 @@
     restoreNativeVideos();
     if (v) {
       try { v.muted = overlay.wasMuted; } catch { /* ignore */ }
-      // Hiding the native video does not normally pause it, but Twitch may
-      // pause when the element is occluded. Resume on restore.
-      try { const p = v.play(); if (p && p.catch) p.catch(() => {}); } catch { /* ignore */ }
+      resumeNative(v, 'now');
+      setTimeout(() => {
+        if (overlay.frame) return;
+        resumeNative(v, '300ms');
+      }, 300);
+      setTimeout(() => {
+        if (overlay.frame) return;
+        resumeNative(v, '1200ms');
+        if (v.paused) {
+          try {
+            const btn = document.querySelector('[data-a-target="player-play-pause-button"]');
+            if (btn) btn.click();
+            adLog('native-resume-click', {
+              paused: v.paused,
+              label: btn ? btn.getAttribute('aria-label') : null,
+            });
+          } catch {
+            /* ignore */
+          }
+        }
+      }, 1200);
     }
     bypassStats.stops++;
     bypassStats.last = { type: 'stop', reason: String(reason || ''), at: Date.now() };
@@ -383,6 +483,9 @@
     overlay.playing = false;
     overlay.switchTries = 0;
     overlay.onMessage = null;
+    overlay.rewound = false;
+    overlay.revealed = false;
+    overlay.nativeHidden = false;
     // Tell the worker the overlay is gone so a timeout/player-error can retry
     // on a later ad playlist instead of leaving adBypassActive stuck true.
     try {
@@ -391,6 +494,32 @@
       }
     } catch {
       /* overlay is optional */
+    }
+  }
+
+  function revealOverlay(reason) {
+    if (!overlay.frame) return;
+    if (!overlay.revealed) {
+      overlay.revealed = true;
+      try {
+        overlay.frame.style.opacity = '1';
+        overlay.frame.style.pointerEvents = 'auto';
+      } catch {
+        /* frame gone */
+      }
+      adLog('overlay-reveal', {
+        reason,
+        rewound: overlay.rewound,
+        playing: overlay.playing,
+      });
+    }
+    if (!overlay.nativeHidden) {
+      hideNativeVideos();
+      overlay.nativeHidden = true;
+    }
+    if (overlay.hideTimer) {
+      try { clearTimeout(overlay.hideTimer); } catch { /* ignore */ }
+      overlay.hideTimer = 0;
     }
   }
 
@@ -467,7 +596,11 @@
     frame.title = 'Clean Twitch stream (ad bypass)';
     frame.setAttribute('allow', 'autoplay; fullscreen; encrypted-media');
     frame.allowFullscreen = true;
-    frame.style.cssText = 'position:fixed;z-index:2147483647;border:0;background:#000;';
+    // Keep the iframe composited while it is still invisible: `opacity:0`
+    // made Chrome treat the clean player as occluded and hls.js never left
+    // rs=0 (measured). 1% black over the native frame is imperceptible and
+    // lets hls.js decode; on Playing we switch to opacity 1 and hide native.
+    frame.style.cssText = 'position:fixed;z-index:2147483647;border:0;background:#000;opacity:0.01;pointer-events:none;';
     frame.addEventListener('load', () => {
       bypassStats.frameLoads = (bypassStats.frameLoads || 0) + 1;
     });
@@ -488,7 +621,21 @@
     overlay.autoplayRetry = false;
     overlay.adEndTries = 0;
     overlay.playing = false;
+    overlay.revealed = false;
+    overlay.nativeHidden = false;
     if (!switchSource) overlay.switchTries = 0;
+    if (overlay.hideTimer) {
+      try { clearTimeout(overlay.hideTimer); } catch { /* ignore */ }
+      overlay.hideTimer = 0;
+    }
+    // Bounded fallback: if hls.js cannot start while the native video is
+    // visible, reveal anyway after 5s. With the 1%-opacity iframe the clean
+    // player usually reports Playing well before this; the timer is only the
+    // safety net that keeps the ad from staying visible forever.
+    overlay.hideTimer = setTimeout(() => {
+      if (!overlay.frame || overlay.revealed) return;
+      revealOverlay('fallback-timeout');
+    }, 5000);
 
     // Small, non-interactive indicator so the reduced-quality player is not
     // mistaken for a broken Twitch player. Positioned in positionOverlay().
@@ -501,11 +648,10 @@
       'padding:3px 7px;border-radius:4px;white-space:nowrap;';
     try { document.body.appendChild(badge); } catch { /* ignore */ }
     overlay.badge = badge;
-    // Concurrency fix (measured): with ANY native Twitch video visible,
-    // Chrome/hls.js keeps the overlay at rs=0/ns=2 forever on channel pages.
-    // The page has more than one <video> (main + PBP); hide them all. The
-    // opaque iframe covers the same rect, so there is no visual difference.
-    hideNativeVideos();
+    // Do NOT hide the native video here. Measured: hiding it immediately is
+    // what produced the black/buffering frame while the clean source started.
+    // Keep it visible until revealOverlay() (overlay Playing or the 2.5s
+    // fallback), then hide all native videos.
 
     overlay.onMessage = (ev) => {
       const m = ev.data && ev.data.__koKick;
@@ -554,11 +700,20 @@
         stopAdOverlay('player-error');
         return;
       }
+      if (m.t === 'ev' && m.e === 'firstframe') {
+        // The clean player has produced its first frame. Swap now: this is the
+        // seam where the native frame is replaced by the clean frame.
+        revealOverlay('firstframe');
+        return;
+      }
       if (m.t === 'st' && m.st) {
         if (m.st.state === 'Playing') {
           overlay.playing = true;
           try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
           overlay.watchdogTimer = 0;
+          // The clean player is actually running: now it is safe to cover the
+          // native video. Before this point the native stays visible.
+          revealOverlay('playing');
           if (overlay.badge) overlay.badge.textContent = 'sem anúncio · qualidade reduzida';
           bypassStats.playing++;
           if (bypassStats.last?.type !== 'playing') {
@@ -650,6 +805,14 @@
           return;
         }
         if (overlay.held) return;
+        // Hybrid step 1: rewind before muting. The native replays buffered
+        // content, giving the clean overlay time to start without a black
+        // frame. One rewind per ad.
+        if (!overlay.rewound) {
+          overlay.rewound = true;
+          const rew = rewindNative(AD_REWIND_SEC);
+          adLog('ad-rewind', { seconds: AD_REWIND_SEC, result: rew });
+        }
         const v = mainVideo();
         if (!v) return;
         overlay.held = true;

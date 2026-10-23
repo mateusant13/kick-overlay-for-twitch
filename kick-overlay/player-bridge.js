@@ -355,6 +355,16 @@ if (HLS_MODE) {
     }
   });
   setInterval(sendSt, 1000);
+  // Report the first real frame immediately. The 1/s `st` heartbeat can lag
+  // up to a second; the content script uses this to swap surfaces exactly when
+  // the clean player can paint, not on a fixed timeout.
+  let firstFrameSent = false;
+  const firstFrame = () => {
+    if (firstFrameSent || V.readyState < 2) return;
+    firstFrameSent = true;
+    post({ t: 'ev', e: 'firstframe', st: st() });
+  };
+  V.addEventListener('playing', firstFrame);
   post({ t: 'ready' });
 } else {
   const IVS = window.IVSPlayerModule;

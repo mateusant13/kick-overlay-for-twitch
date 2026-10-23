@@ -830,3 +830,72 @@ Twitch tab after extension reload 0.8.21 to inject the new bridge/recorder.
 With adblock off, the next preroll should produce `ad-ui-on` with
 `match.kind="wrapper"` and `content-play` (or `ad-video-play` if it starts
 during the ad). Use `d.ms` for the content -> ad delay.
+
+---
+
+## 2026-10-23 - "refresh infinito" (session carousel) verdict
+
+User's idea: after opening a live and taking a preroll, a page refresh gives
+~4-5s of live before the ad returns; keep refreshing that window invisibly to
+make it infinite.
+
+Measured on `jubilausz`, visible tab, adblock ON (the worker still logs the
+ad-only playlist before stripping it), 6 reloads alternating normal/paused:
+
+| load | mode | first ad-only playlist | content-play |
+|---|---|---|---|
+| 1 | normal | 3.785s | 4.618s |
+| 2 | paused from load | **2.852s** | 9.364s (after resume) |
+| 3 | normal | 10.638s | 4.147s |
+| 5 | normal | 6.574s | 3.824s |
+
+The decisive result is load 2: the ad-only playlist appeared at **2.85s even
+with the video paused**. The window is tied to the page load/playback session,
+not to playback time. A preloaded second session therefore consumes its own
+window while hidden and is already in the ad when swapped in. Native
+`video-playing` also takes ~3.3-4.0s on these loads, so a swap cannot happen
+before 2.8s. **The invisible infinite-refresh/carousel is not viable.**
+
+## Hybrid rewind + first-frame reveal (0.8.22 branch `hybrid-ad-rewind`)
+
+Implemented:
+- `ad-hold` rewinds the native player 5s (logged as `ad-rewind`) before mute.
+- The clean iframe starts at `opacity:0.01` (not 0) so Chrome keeps it
+  composited.
+- The native stays visible until the clean player emits `firstframe` (new
+  event from `player-bridge.js` on the video's `playing` event) or a 5s
+  fallback; only then does `revealOverlay()` hide the native.
+- `stopAdOverlay()` retries the native resume at 0/300/1200ms and clicks
+  Twitch's play button as a last resort (`native-resume`,
+  `native-resume-click`).
+
+Real ad in the separate background Edge instance (logged out, extension
+0.8.22, `jubilausz`):
+- `ad-hold` 2.514s (rewind skipped: native not playing yet on cold load)
+- `ad-start` 11.633s (source probing)
+- `overlay-reveal` **13.110s, reason `firstframe`**, overlay 360p
+- `ad-end` 62.663s, native restored
+- before the resume retry the native stayed paused after `ad-end`; the retry
+  is the fix under test.
+
+The 1%-opacity iframe alone is not enough to make hls.js start while the
+native is visible: a deterministic test with a VOD HLS source stayed
+`Idle/Buffering` for ~5s and only reached `Playing` 0.5s after the native was
+hidden. The first-frame event still removes the *fallback* black window
+(reveal at 1.48s after ad-start vs 5s timeout), but the clean player cannot
+buffer without hiding the native. A real freeze/black-free swap remains
+unsolved; the current best is a short native freeze/loading gap followed by
+the 360p clean stream.
+
+## Background test harness
+
+Chrome 155 (branded) ignores `--load-extension`; Edge 155 accepts it. The
+background tests run in a separate Edge instance:
+- profile `G:\Temp\opencode\ko-edge-profile`
+- CDP port `9335`
+- extension copied to `G:\Temp\opencode\ko-ext` (path without spaces)
+- extension id `jkenjkmpfhknffakflcbgkkclchfdaip`
+- watcher writes `G:\Temp\opencode\ko-bg-results.jsonl` and
+  `ko-bg-summary.txt`.
+
+The user's Chrome (port 9222) is not used by the watcher.

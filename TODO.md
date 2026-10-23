@@ -285,3 +285,28 @@ Extension fixes in this round:
 - [ ] Real preroll with adblock off after a user refresh: read
   `ad-ui-on.d.ms - content-play.d.ms` and use observed + 1s as the delay
   target. Current log is cleared for this run.
+
+## 0.8.22 (2026-10-23, hybrid rewind + first-frame reveal)
+
+- [x] Measure the "4-5s refresh window": ad-only playlist appears 2.85-10.6s
+  after load; it appeared at 2.85s **while paused**. The window is
+  load/session-based, so a preloaded second player consumes it. The invisible
+  infinite-refresh/carousel idea is not viable.
+- [x] `ad-hold` rewinds the native 5s (`ad-rewind`) when it is actually
+  playing; cold prerolls log `skipped:"not-playing"`.
+- [x] Clean iframe starts at `opacity:0.01`, reports `firstframe` from
+  `player-bridge.js`, and the native is hidden only on that event (5s fallback
+  kept as a safety net).
+- [x] Background Edge harness (separate profile/port 9335) so tests do not
+  touch the user's Chrome.
+- [x] Real ad in the harness: `overlay-reveal` reason `firstframe` 1.48s after
+  `ad-start`; overlay 360p played; `ad-end` restored.
+- [x] Post-`ad-end` native resume retry (`native-resume` at 0/300/1200ms plus
+  Twitch play-button click).
+- [ ] Confirm resume retry across the channel list (background watcher
+  `ko-bg-results.jsonl`).
+- [ ] Probe `autoplay/android` first on a cold preroll so the clean 360p
+  overlay starts in ~1s instead of spending ~9s probing HD types.
+- [ ] The true no-black/no-freeze swap is still unsolved: hls.js does not
+  buffer while the native video is visible; the current best is a short
+  native freeze/loading gap, then the clean 360p stream.

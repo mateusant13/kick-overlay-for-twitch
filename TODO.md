@@ -319,6 +319,15 @@ Extension fixes in this round:
 - [x] Merge `hybrid-ad-rewind` into `main` and push (main `2e19adc`).
 - [x] Sync the user's vendor copy to 0.8.24 (hashes match) and reload the
   extension; the existing tab picks it up on reload.
-- [ ] The true no-black/no-freeze swap is still unsolved: hls.js does not
-  buffer while the native video is visible; the current best is a short
-  native freeze/loading gap, then the clean 360p stream.
+- [x] 0.8.25: fix the ~5s switch loading by starting the Twitch overlay muted
+  (autoplay policy) and using `liveSyncDurationCount:1` + `maxBufferLength:15`
+  for the Twitch HLS mode only. Background Edge (default autoplay policy),
+  `ko-bg-results5.jsonl`/`ko-bg-results6.jsonl`: 3 real pods, all
+  `firstframe`, `start -> reveal` **2.444s / 1.874s / 1.618s** (0.8.24 user
+  Chrome was 3.206s), `hold -> start` 1-3ms from prewarm, completed pods
+  resumed at 0/300/1200ms with final `rs=4`. Badge is click-to-unmute.
+- [ ] The true zero-frame swap is still unsolved: a second hls.js player must
+  fetch a live segment, so the clean surface appears ~1.6-2.4s after
+  `ad-start`. A midroll keeps the rewound native content on screen during that
+  window; a cold preroll can still show the ad briefly. Eliminating it fully
+  needs a continuously running muted standby player (extra bandwidth/CPU).

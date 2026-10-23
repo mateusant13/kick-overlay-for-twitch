@@ -160,8 +160,10 @@
     channel: null,
     video: null,
     wasMuted: false,
+    wasVolume: 1,
     held: false,
     holdWasMuted: false,
+    holdVolume: 1,
     hiddenVideos: [],
     startedAt: 0,
     positionTimer: 0,
@@ -358,7 +360,7 @@
         try { v.muted = true; } catch { /* ignore */ }
         continue;
       }
-      overlay.hiddenVideos.push({ el: v, visibility: v.style.visibility, muted: v.muted });
+      overlay.hiddenVideos.push({ el: v, visibility: v.style.visibility, muted: v.muted, volume: v.volume });
       try { v.style.visibility = 'hidden'; } catch { /* ignore */ }
       // Mute every native video, not just the main one: a PBP/ad video can
       // keep playing audio behind the opaque overlay.
@@ -367,11 +369,12 @@
   }
 
   function restoreNativeVideos() {
-    for (const { el, visibility, muted } of overlay.hiddenVideos) {
+    for (const { el, visibility, muted, volume } of overlay.hiddenVideos) {
       try {
         if (el.isConnected) {
           el.style.visibility = visibility;
           if (typeof muted === 'boolean') el.muted = muted;
+          if (Number.isFinite(volume)) el.volume = volume;
         }
       } catch { /* ignore */ }
     }
@@ -443,6 +446,13 @@
     restoreNativeVideos();
     if (v) {
       try { v.muted = overlay.holdWasMuted; } catch { /* ignore */ }
+      // Twitch sets volume=0 when the element is muted. Restoring only
+      // `muted` left the icon unmuted but the video at volume 0, so the user
+      // heard nothing until clicking the volume button (real report). Restore
+      // the pre-hold volume too.
+      try {
+        if (Number.isFinite(overlay.holdVolume)) v.volume = overlay.holdVolume;
+      } catch { /* ignore */ }
     }
     overlay.held = false;
   }
@@ -561,6 +571,9 @@
       restoreNativeVideos();
       if (v) {
         try { v.muted = overlay.wasMuted; } catch { /* ignore */ }
+        try {
+          if (Number.isFinite(overlay.wasVolume)) v.volume = overlay.wasVolume;
+        } catch { /* ignore */ }
         resumeNative(v, 'now');
         setTimeout(() => {
           // A new *hidden standby* must not block the native resume retries;
@@ -674,6 +687,7 @@
     if (!AD_OVERLAY_ENABLED) return;
     if (!url) return;
     const prevWasMuted = overlay.wasMuted;
+    const prevWasVolume = overlay.wasVolume;
     // A stall timer belongs to the previous frame/source. Starting a new
     // overlay/switch invalidates it; the new frame gets its own.
     clearOverlayStall();
@@ -800,6 +814,9 @@
     overlay.wasMuted = switchSource && typeof prevWasMuted === 'boolean'
       ? prevWasMuted
       : (overlay.held ? overlay.holdWasMuted : v.muted);
+    overlay.wasVolume = switchSource && Number.isFinite(prevWasVolume)
+      ? prevWasVolume
+      : (overlay.held ? overlay.holdVolume : v.volume);
     overlay.held = false;
     overlay.startedAt = Date.now();
     overlay.ready = false;
@@ -1105,6 +1122,7 @@
         if (!v) return;
         overlay.held = true;
         overlay.holdWasMuted = v.muted;
+        overlay.holdVolume = v.volume;
         // Mute immediately so the ad audio never plays. Do not hide the video
         // yet: the clean source is still being probed, and a black frame is
         // worse than one second of muted ad. startAdOverlay() covers it as
@@ -1763,7 +1781,12 @@
       switchBusy = true;
       lastSwitchAt = Date.now();
       try {
-        const url = await withTimeout(findCleanHlsUrl(channel || lastChannel, true), 10000);
+        // Prefer the source that is measured clean during SSAI. A web/HD
+        // token can be clean before the pod and go ad-only mid-pod, which
+        // forces another switch while the ad is on screen. autoplay/android
+        // is lower quality but stays clean, so a switch lands on a source the
+        // page can keep for the rest of the break.
+        const url = await withTimeout(findCleanHlsUrl(channel || lastChannel, true, true), 10000);
         if (url && adBypassActive) {
           debugLog('bypass.switch', { channel: channel || lastChannel });
           postBypass({ type: 'ad-start', channel: lastChannel, url, switch: true });
@@ -1786,7 +1809,10 @@
       prewarmBusyChannel = channel;
       prewarmPromise = (async () => {
         try {
-          const url = await withTimeout(findCleanHlsUrl(channel, true), 8000);
+          // prewarmMode starts with autoplay/android: it is the only measured
+          // clean-during-SSAI type. Starting a hidden HD web token here is what
+          // made the warm standby go ad-only in the middle of the Necros pod.
+          const url = await withTimeout(findCleanHlsUrl(channel, true, true), 8000);
           if (url) {
             prewarm = { channel, url, at: Date.now(), busy: false };
             debugLog('prewarm.ok', { channel });

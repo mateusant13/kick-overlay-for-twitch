@@ -1,6 +1,6 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.28**, persistent profile
+Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.29**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
 CDP port 9222 (user Chrome) and 9335 (separate Edge test harness). Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
@@ -1202,3 +1202,54 @@ Open limitation: real-ad end-to-end with 0.8.28 has not been re-observed; the
 by the Edge scenarios above plus the incident log. Cold-start ads can still show
 the native ad (muted) while waiting for a healthy clean `Playing`; that is the
 deliberate alternative to a frozen clean frame.
+
+### 0.8.29 (2026-10-23): clean-during-SSAI standby + volume restore
+
+Two remaining issues after 0.8.28:
+
+1. **The warm standby could still go ad-only mid-pod.** `prewarmCleanSource()`
+   called `findCleanHlsUrl(channel, true)` with `prewarmMode=false`, so the
+   hidden standby was minted from `mobile_web`/`popout`/`site` HD. Those types
+   are clean *outside* the ad window but can become ad-only when a long SSAI
+   pod starts. The warm HD frame then had to switch sources during the ad, which
+   is the path that produced the 0.8.26 freeze. The `prewarmMode` ladder
+   (`autoplay/android` first) existed but was never used by the prewarm or the
+   ad-time switch.
+2. **Unmuted live, no audio after the ad.** Twitch reacts to
+   `video.muted=true` by setting `video.volume=0`. The extension restored only
+   `muted` after the ad, leaving the element at volume 0 while the volume icon
+   could show unmuted. The user had to click the volume button; real report:
+   “a live tava desmutada e não tinha áudio”. Hidden native videos had the same
+   missing volume record.
+
+0.8.29 changes:
+
+- `prewarmCleanSource()` and `switchCleanSource()` now pass `prewarmMode=true`.
+  The standing hidden player is **360p `autoplay/android`**, the only type
+  measured clean during SSAI. The native player is still 1080p whenever no ad
+  overlay is visible; during an ad the clean overlay is lower quality, which the
+  owner explicitly accepted. This removes the HD-token-goes-ad-only source
+  switch from the normal long-pod path.
+- Capture `volume` alongside `muted` at ad-hold / overlay start and in every
+  hidden native video. Restore both in `restoreHeldMute()`,
+  `stopAdOverlay()`, and `restoreNativeVideos()`. Restoring `muted=false` alone
+  was not enough because Twitch had already zeroed the volume.
+- Removed the UI-label mute heuristic: the icon reflects our own induced mute,
+  so it cannot be trusted to infer the user's pre-ad intent. The captured
+  pre-ad `muted` + `volume` pair is the source of truth.
+
+Edge 0.8.29 validation (separate profile, `--mute-audio`):
+
+- standby is `360p` (`autoplay/android`, `qcount:2`) and reaches `Playing`
+  with `muted:true`; it is hidden at `opacity:0.01`;
+- `ad-hold` reveals it at opacity 1; native goes `muted:true, volume:0` while
+  covered;
+- `ad-end` restores native `muted:false, volume:0.5`; the Twitch button reads
+  “Mudo (m)” (audio on) and no click is needed. Before 0.8.29 the same sequence
+  left `volume:0`.
+- pointerdown on the hidden standby still leaves it muted; no doubled audio.
+
+The extension in the user profile was reloaded to 0.8.29. Existing tabs still
+need one refresh to replace the old content script; until then they keep 0.8.28
+behavior. HD *during* an ad is still only possible with the owner's VPS egress
+in an ad-free region; 360p clean is the accepted no-VPS fallback.

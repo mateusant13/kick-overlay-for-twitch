@@ -404,3 +404,24 @@ from native videos being re-unmuted after `hideNativeVideos()` had stored them.
   clean `Playing`; this is preferred over a frozen clean frame.
 - [ ] Long pods can still trigger ad-only source switches; stall recovery now
   bounds the failure to a few seconds instead of a permanent freeze.
+
+## 0.8.29 (2026-10-23, clean-during-SSAI standby + audio restore)
+
+- [x] Use `autoplay/android` (360p, measured clean during SSAI) for the hidden
+  standby and for ad-time source switches instead of HD web tokens that can go
+  ad-only mid-pod. `prewarmCleanSource()` / `switchCleanSource()` now pass
+  `prewarmMode=true`.
+- [x] Capture and restore native `volume` as well as `muted` at ad-hold,
+  overlay start, and for every hidden native video. Twitch zeroes volume when
+  `muted=true`, so restoring only `muted` left silent-but-unmuted audio.
+- [x] Edge 0.8.29: standby 360p `Playing`; `ad-hold` native `muted:true,
+  volume:0`; `ad-end` native `muted:false, volume:0.5`, button “Mudo (m)”, no
+  click required.
+- [x] Vendor synced to 0.8.29 and extension reloaded. Existing tabs need one
+  refresh to load the new content script.
+- [ ] HD during ads still needs the owner's VPS in an ad-free region. Without
+  it, the accepted tradeoff is 360p clean during the pod and 1080p native
+  outside it.
+- [ ] Re-observe a real long pod with 0.8.29; the 0.8.26/0.8.28 incident path
+  is the evidence for the old failure, and the 0.8.29 standby type is measured
+  clean in the matrix.

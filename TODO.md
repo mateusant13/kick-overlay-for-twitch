@@ -311,8 +311,14 @@ Extension fixes in this round:
   hold -> start from 9.4s to 4.30-4.83s (the remaining 3.5s was the prewarm
   wait).
 - [x] Validate 0.8.24 prewarm wait 800ms (background `ko-bg-results4.jsonl`):
-  6 real pods, 6/6 firstframe, cold hold -> start 1.855-1.920s, prewarm hits
+  7 real pods, 7/7 firstframe, cold hold -> start 1.812-1.920s, prewarm hits
   0-1ms at 1080p, resume 0/300/1200ms all paused:false with rs=4.
+- [x] User Chrome live verification on 0.8.24 (`kittykat02_`): ad-hold 7.968s,
+  ad-start 10.116s, firstframe reveal 13.322s, 360p Playing, ad-end 55.783s,
+  native resumed at 300ms and final rs=4.
+- [x] Merge `hybrid-ad-rewind` into `main` and push (main `2e19adc`).
+- [x] Sync the user's vendor copy to 0.8.24 (hashes match) and reload the
+  extension; the existing tab picks it up on reload.
 - [ ] The true no-black/no-freeze swap is still unsolved: hls.js does not
   buffer while the native video is visible; the current best is a short
   native freeze/loading gap, then the clean 360p stream.

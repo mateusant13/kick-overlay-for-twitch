@@ -6,9 +6,19 @@ A extensão mantém o player nativo da Twitch quando você está na Twitch. O ov
 
 ---
 
+## O que é o overlay?
+
+O overlay é uma **segunda camada de vídeo** que fica por cima do player da Twitch. O player da Twitch continua rodando embaixo, mudo, e o chat, os controles, as raids e o resto da página continuam funcionando.
+
+Quando você escolhe **Kick** ou **YouTube** no popup, a extensão troca apenas o vídeo que aparece. Não abre outra aba, não muda de site e não substitui a Twitch.
+
+Não é um overlay de OBS (aquele usado em transmissão). É um player dentro da própria página da Twitch, para você assistir.
+
+---
+
 ## O que ele faz
 
-- **Overlay de Kick** - o canal da Kick toca dentro da página da Twitch, com os controles do projeto.
+- **Overlay de Kick** - o canal da Kick toca por cima do player da Twitch, com os controles do projeto.
 - **Overlay de YouTube** - funciona com URL de live/vídeo, `@handle` ou ID `UC...`.
 - **Adblock para lives da Twitch** - reescreve o token do player, remove os blocos de anúncio dos playlists e, quando o anúncio já veio colado no stream, cobre o player com um frame limpo em 360p até o intervalo acabar.
 - **Adblock para VODs da Twitch** - bloqueia as requisições de anúncio CSAI dos vídeos sob demanda.
@@ -66,13 +76,19 @@ Clique no ícone da extensão na barra do navegador e deixe-o fixado. Depois abr
 
    | Player | O que faz |
    |--------|-----------|
-   | **Kick** | Usa o mesmo nome da Twitch como canal da Kick (dá para editar). |
-   | **YouTube** | Aceita URL de live/vídeo, `@handle` ou ID `UC...`. |
+   | **Kick** | Informe o nome do canal na Kick. Se for igual ao da Twitch, pode deixar o padrão. |
+   | **YouTube** | Cole a URL da live/vídeo, o `@handle` ou o ID `UC...`. Se o streamer usa outro nome no YouTube, é aqui que você ajusta. |
    | **Twitch** | Mantém o player nativo; o adblock continua ativo. |
 
-4. Preencha o mapeamento e clique em **Save**. O ajuste vale só para aquele canal.
+4. Preencha o canal e clique em **Save**. O ajuste vale só para aquele canal da Twitch.
 5. Use o toggle **Overlay** para ligar/desligar o player alternativo.
 6. Use o toggle **Twitch adblock** para ligar/desligar o bloqueio de anúncios.
+
+> **Importante para multi stream:** clique no ícone da extensão e informe o canal da Kick ou o YouTube do streamer. O nome pode ser diferente do nome usado na Twitch. No Kick, se você não informar, a extensão tenta usar o mesmo nome da Twitch; no YouTube, é preciso colocar a URL, o `@handle` ou o ID. Sem isso, pode abrir o canal errado ou ficar sem imagem.
+
+### Streamer faz multi stream?
+
+Se o streamer transmite na Twitch e também na Kick e/ou no YouTube, o nome do canal pode ser diferente em cada plataforma. É por isso que o passo 2 é importante: clique no ícone da extensão e preencha o canal certo. A extensão salva esse ajuste por canal da Twitch; na próxima vez você não precisa configurar de novo.
 
 ### Atualizei a extensão e nada mudou
 
@@ -106,7 +122,7 @@ Isso é de propósito: em intervalos longos, a fonte em HD pode virar “só an�
 | Fiquei sem áudio depois do anúncio | Confirme que está na **0.8.29** ou mais novo e dê **F5**. A versão 0.8.29 restaura volume + mudo; antes disso o volume ficava em 0. |
 | Apareceu um anúncio | No anúncio antes da live, o anúncio nativo pode aparecer **mudo** por alguns segundos enquanto o frame limpo fica pronto. Isso é preferível a uma tela preta. Se acontecer no meio de um intervalo longo, verifique se o toggle **Twitch adblock** está ligado. |
 | Tela preta ou player travado | A extensão tenta voltar para o player nativo quando o frame limpo não chega a `Playing`. Se persistir, dê **F5** e desligue o overlay para isolar o problema. |
-| Kick ou YouTube não aparece | Confira se o canal está ao vivo e se o nome/URL está certo. O mapeamento é por canal e fica salvo. |
+| Kick ou YouTube não aparece | Confira se o canal está ao vivo e se o nome/URL está certo. Se o streamer faz multi stream, confirme no popup se o canal da Kick/YouTube é o mesmo que ele está usando. O mapeamento é por canal e fica salvo. |
 | Quero conferir a versão | Abra `chrome://extensions` e veja o número embaixo do nome. A versão validada é **0.8.29**. |
 
 ---

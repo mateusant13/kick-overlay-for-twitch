@@ -1,10 +1,10 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-22. Chrome 155, extension **0.8.21**, persistent profile
+Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.26**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
-CDP port 9222. Channels used for repro: `twitch.tv/duda` (pre-roll appears most
+CDP port 9222 (user Chrome) and 9335 (separate Edge test harness). Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
-(midroll/preroll).
+(midroll/preroll), `twitch.tv/Necros` (long real pod during 0.8.26 work).
 
 Read this before touching `twitch-adblock.js` again. Several "obvious" fixes
 were already tried and measured; do not repeat them without new evidence.
@@ -1052,3 +1052,83 @@ The vendor copy was synced to 0.8.25 and the extension reloaded
   a loading box
 - the test window was closed before `ad-end`; the 0.8.24 run covers resume
   (0/300/1200ms, final native rs=4)
+
+### 0.8.26 (2026-10-23): permanent hidden standby player
+
+The remaining gap in 0.8.25 was structural: every ad paid the hls.js
+`loadSource` + first-segment cost (1.6-2.6s), and a cold preroll could show
+that much ad. 0.8.26 keeps a second clean player **already running** behind
+the native surface, so a midroll only has to change opacity.
+
+Implementation (`kick-overlay/twitch-adblock.js`, `manifest.json` 0.8.26):
+
+- The page starts a hidden clean iframe (`#ko-adfix`, `opacity:0.01`,
+  `pointer-events:none`, muted) when the worker has a fresh prewarm and the
+  tab is visible. It is a normal `startAdOverlay(..., standby=true)`: no badge,
+  no fallback timer, no native hiding, 300s lifetime.
+- The worker emits `standby-start` on the `ko-adblock-bypass` BroadcastChannel
+  after a fresh prewarm (`postStandbyStart`). It also emits `standby-request`
+  from the page after ad-end/visibility recovery; the worker reuses a fresh
+  prewarm or probes a new clean master.
+- `ad-hold` reveals a standby that is `Playing` (`overlay-reveal` reason
+  `standby`, opacity 1) and leaves the native hidden/muted. `ad-start` adopts
+  a playing standby or rebuilds normally if it never became ready.
+- `firstframe`/`Playing` only mark a standby ready while `adActive` is false.
+  Pure standby shutdowns (timeout, ad-only, player error, channel change) do
+  not post `overlay-stop` and do not resume/seek the native player.
+- Adopting a standby increments `bypassStats.starts` and resets the overlay
+  timeout to 180s from the ad.
+- Ad-end still waits for the worker's two-clean-playlist signal, then restores
+  the native video and schedules a new standby.
+
+Fixes found while validating 0.8.26:
+
+- **Native resume was blocked by the new standby.** The 1200ms retry bailed
+  out on any `overlay.frame`; the new hidden standby is created at ~1s, so a
+  real pod left the native paused after ad-end. The retries now ignore a frame
+  only when it is an ad overlay (`overlay.frame && !overlay.standby`).
+  Synthetic proof: pause the native while it is hidden, send `ad-end`; 3s later
+  native `paused:false`, new standby started, both playing.
+- **SPA channel changes could reveal the previous channel.** The page compares
+  `location.pathname` with `msg.channel`; a mismatch on `standby-start` replaces
+  the standby, and a mismatch on `ad-hold` tears it down and falls through to
+  the normal cold path instead of showing stale video.
+- **Source switches had a black gap.** On a long `Necros` pod the clean token
+  went ad-only and the worker rebuilt the iframe while the native was hidden;
+  removing the old iframe immediately produced ~2.4s of black. 0.8.26 keeps
+  the last visible clean frame underneath (`z-index` one lower,
+  `pointer-events:none`) until the replacement reveals, then removes it. The
+  original native mute state is also carried across the rebuild (previously it
+  was re-read while the native was muted by the overlay).
+- **Native mute/visibility is restored with the original state.** The switch
+  path no longer overwrites `overlay.wasMuted` with the temporary muted state.
+
+Evidence:
+
+| test | result |
+|---|---|
+| Synthetic standby, Edge 9335 | 1080p standby ready; `ad-hold -> reveal` **58ms** first run, **2ms** later; no fallback; `ad-end` 35ms; native restored; new standby ready |
+| Real `Necros` pod (worker log) | `standby-start` 2739ms, `ad-hold` 8172ms, `overlay-reveal` reason **standby 8174ms** (**2ms**), `ad-start` 8174ms; 1080p clean picture; native hidden/muted |
+| Earlier real pod (watcher log) | `ad-hold` 11746ms -> `overlay-reveal` reason `standby` 11747ms (**1ms**) |
+| Native paused while hidden | `ad-end` -> native `paused:false` at T+3s, new standby `Playing` by T+6s |
+| Source-switch fallback | two iframes during a forced switch: old `opacity:1 z=...646`, new `opacity:0.01 z=...647`; new error -> both removed, native restored (no black gap) |
+
+Limitations / open issues:
+
+- The long `Necros` pod (~130s) triggered repeated ad-only source switches
+  (~37s/69s/100s). The first standby was clean 1080p; rebuilds can report
+  `firstframe` with `playing:false` and the replacement can be frozen for a
+  beat. The old frame is now kept during the switch, so the failure mode is a
+  held clean frame, not black.
+- The standby runs continuously at up to 1080p (bandwidth/CPU). The owner
+  explicitly approved this tradeoff. Set `AD_STANDBY_ENABLED=false` to fall
+  back to 0.8.25's on-demand overlay.
+- A channel whose native video is paused by autoplay policy cannot reveal a
+  standby; `ad-start` falls back to the normal cold rebuild. The user's normal
+  interactive Chrome does not hit this.
+- Real-ad end-to-end with the **final** 0.8.26 (after the resume and
+  switch-frame fixes) was not re-observed; the four `Necros` reloads after the
+  fixes had no ad. The earlier real pod proves the 1-2ms reveal; the resume and
+  switch-frame fixes are covered synthetically.
+- HD remains limited by the clean token; an own VPS in an ad-free region is
+  still required for reliable 1080p (see `ADBLOCK-HD-RESEARCH.md`).

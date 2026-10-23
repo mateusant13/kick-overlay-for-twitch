@@ -329,8 +329,43 @@ Extension fixes in this round:
 - [x] User Chrome 0.8.25 live verification (`Necros`): `ad-hold` 65.006s,
   `ad-start` 65.013s, `firstframe` reveal 67.657s (2.644s), overlay 1080p
   Playing muted, no fallback; the 5s rewind covered the switch.
-- [ ] The true zero-frame swap is still unsolved: a second hls.js player must
-  fetch a live segment, so the clean surface appears ~1.6-2.4s after
-  `ad-start`. A midroll keeps the rewound native content on screen during that
-  window; a cold preroll can still show the ad briefly. Eliminating it fully
-  needs a continuously running muted standby player (extra bandwidth/CPU).
+- [x] The true zero-frame swap is solved by the 0.8.26 permanent hidden
+  standby: a clean player is already `Playing` when `ad-hold` arrives, so the
+  swap is `opacity:0.01 -> 1` (2ms measured; 58ms synthetic first-run poll).
+  See `kick-overlay/ADBLOCK-FINDINGS.md` -> 0.8.26 for the full evidence and
+  the remaining source-switch limitation.
+
+## 0.8.26 (2026-10-23, hidden standby player)
+
+- [x] `AD_STANDBY_ENABLED`: page starts a muted, pointer-events:none clean
+  iframe at `opacity:0.01` from the worker's fresh prewarm
+  (`standby-start` over `ko-adblock-bypass`); 300s lifetime, no badge/fallback.
+- [x] `ad-hold` reveals a `Playing` standby immediately; `ad-start` adopts it
+  or rebuilds normally if it never reached `Playing`.
+- [x] Pure standby shutdowns (timeout/ad-only/error/channel change) do not
+  post `overlay-stop` and do not resume/seek native.
+- [x] Adopt resets the overlay timeout to 180s and increments `starts`.
+- [x] Fix native resume after ad-end: the 0/300/1200ms retries no longer bail
+  on a newly created hidden standby. Synthetic: native paused while hidden ->
+  `ad-end` -> `paused:false` at T+3s, standby ready by T+6s.
+- [x] SPA channel guard: `standby-start`/`ad-hold` compare the page path with
+  `msg.channel`; stale standby is stopped instead of revealing the old channel.
+- [x] Source-switch no-black fallback: keep the last visible clean frame
+  underneath the replacement until it reveals; preserve the original native
+  mute state across the rebuild.
+- [x] Real `Necros` pod: `standby-start` 2739ms, `ad-hold` 8172ms,
+  `overlay-reveal reason=standby` 8174ms (**2ms**), 1080p; earlier watcher pod
+  measured **1ms**. Synthetic: **58ms** first reveal, **2ms** warm.
+- [x] Sync the user's vendor copy to 0.8.26 (twitch-adblock.js/manifest
+  hashes match; player-bridge already matched) and reload the extension
+  (0.8.25 -> 0.8.26) without opening a window. Existing tabs pick it up on
+  their next refresh.
+- [ ] Re-observe a real ad with the final 0.8.26 (after the resume/switch-frame
+  fixes); the four post-fix `Necros` reloads were ad-free. The earlier real pod
+  proves the warm reveal; resume and switch-frame are synthetic.
+- [ ] Long pods can still fire repeated ad-only source switches; the old frame
+  now covers the black gap, but the replacement can be frozen briefly. Probe
+  another player type if this becomes common.
+- [ ] Standby runs continuously at up to 1080p (owner approved). Keep
+  `AD_STANDBY_ENABLED=false` as the low-bandwidth fallback.
+- [ ] HD proxy still needs an own VPS in an ad-free region.

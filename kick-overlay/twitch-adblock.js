@@ -131,12 +131,27 @@
   // visible and never lets the ad play. The native player is restored after
   // two clean playlists.
   const AD_OVERLAY_ENABLED = true;
+  // Preload one clean 360p/1080p surface while the channel is live. This is
+  // the only way to make the swap effectively 0s: a second hls.js player
+  // cannot share the native player's decoded frames. It costs bandwidth/CPU
+  // only while the Twitch tab is visible and an ad is not already active.
+  const AD_STANDBY_ENABLED = true;
   // Hybrid: on the first ad signal, jump the native player back this many
   // seconds. 5s = the user's observed ~4s content grace + 1s safety. The real
   // value is measured from ko.adlog (`ad-rewind` / `content-play`); this is
   // only the starting point.
   const AD_REWIND_SEC = 5;
-  const bypassStats = { starts: 0, stops: 0, errors: 0, playing: 0, last: null };
+  const bypassStats = {
+    starts: 0,
+    stops: 0,
+    errors: 0,
+    playing: 0,
+    standbyStarts: 0,
+    standbyReady: 0,
+    standbyHits: 0,
+    last: null,
+    lastStandby: null,
+  };
   stats.adBypass = bypassStats;
   const overlay = {
     frame: null,
@@ -171,7 +186,47 @@
     revealed: false,
     nativeHidden: false,
     hideTimer: 0,
+    // Preloaded clean player. It runs muted at 1% opacity over the native
+    // surface, so an ad can be covered immediately instead of paying the
+    // ~1.6-2.6s HLS segment-fetch cost after ad-hold. It is not an ad until
+    // adActive is set; firstframe/Playing only mark it ready while standby.
+    standby: false,
+    adActive: false,
   };
+
+  // The worker owns the prewarm probes and the ad state; it posts
+  // `standby-start` with a clean URL when a standby may run. This page-side
+  // request asks it to re-use a fresh prewarm or probe a new one, after an ad
+  // or when the tab becomes visible again. It never starts anything directly.
+  let standbyRequestTimer = 0;
+  function pageChannel() {
+    try {
+      return (location.pathname.split('/').filter(Boolean)[0] || '').toLowerCase();
+    } catch {
+      return '';
+    }
+  }
+  function requestStandby(delay = 1200, force = false) {
+    try { clearTimeout(standbyRequestTimer); } catch { /* ignore */ }
+    standbyRequestTimer = setTimeout(() => {
+      standbyRequestTimer = 0;
+      if (overlay.frame || overlay.held || overlay.adActive) return;
+      try {
+        bypassChannel?.postMessage({
+          type: 'standby-request',
+          page: pageId,
+          channel: null,
+          force: !!force,
+        });
+      } catch {
+        /* overlay is optional */
+      }
+    }, delay);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') requestStandby(0);
+  });
 
   function mainVideo() {
     let best = null;
@@ -355,6 +410,7 @@
   function finishAdOverlay() {
     if (!overlay.frame) {
       stopAdOverlay('ad-end');
+      requestStandby();
       return;
     }
     // The worker waits for clean playlists, but Twitch's ad chrome can linger
@@ -365,6 +421,7 @@
       return;
     }
     stopAdOverlay('ad-end');
+    requestStandby();
   }
 
   function restoreHeldMute() {
@@ -404,6 +461,10 @@
   }
 
   function stopAdOverlay(reason) {
+    // A standby that was never adopted is invisible content behind the native
+    // player. Stopping it must not post overlay-stop (that clears the worker's
+    // ad state without an ad) and must not resume/seek the native player.
+    const wasStandby = !!overlay.standby && !overlay.revealed && !overlay.adActive;
     try { clearTimeout(overlay.extTimer); } catch { /* ignore */ }
     overlay.extTimer = 0;
     try { clearTimeout(overlay.adEndTimer); } catch { /* ignore */ }
@@ -418,6 +479,11 @@
     if (!overlay.frame) {
       // Even without a frame, a badge/unmute handler can be left over from a
       // source switch that failed between teardown and rebuild.
+      if (overlay.switchPrev) {
+        try { clearTimeout(overlay.switchPrev.timer); } catch { /* ignore */ }
+        try { overlay.switchPrev.frame.remove(); } catch { /* ignore */ }
+        overlay.switchPrev = null;
+      }
       if (overlay.badge) { try { overlay.badge.remove(); } catch { /* ignore */ } overlay.badge = null; }
       if (overlay.unmuteHandler) {
         try { document.removeEventListener('pointerdown', overlay.unmuteHandler, true); } catch { /* ignore */ }
@@ -428,6 +494,8 @@
       overlay.rewound = false;
       overlay.revealed = false;
       overlay.nativeHidden = false;
+      overlay.standby = false;
+      overlay.adActive = false;
       return;
     }
     try { clearInterval(overlay.positionTimer); } catch { /* ignore */ }
@@ -441,38 +509,54 @@
       try { overlay.badge.remove(); } catch { /* ignore */ }
       overlay.badge = null;
     }
-    try { overlay.frame.remove(); } catch { /* ignore */ }
-    const v = overlay.video && overlay.video.isConnected ? overlay.video : mainVideo();
-    // restoreNativeVideos() restores every video's stored state, then the main
-    // video's pre-overlay mute state wins (the stored value can be the mute we
-    // applied in ad-hold/after hiding).
-    restoreNativeVideos();
-    if (v) {
-      try { v.muted = overlay.wasMuted; } catch { /* ignore */ }
-      resumeNative(v, 'now');
-      setTimeout(() => {
-        if (overlay.frame) return;
-        resumeNative(v, '300ms');
-      }, 300);
-      setTimeout(() => {
-        if (overlay.frame) return;
-        resumeNative(v, '1200ms');
-        if (v.paused) {
-          try {
-            const btn = document.querySelector('[data-a-target="player-play-pause-button"]');
-            if (btn) btn.click();
-            adLog('native-resume-click', {
-              paused: v.paused,
-              label: btn ? btn.getAttribute('aria-label') : null,
-            });
-          } catch {
-            /* ignore */
-          }
-        }
-      }, 1200);
+    if (overlay.switchPrev) {
+      try { clearTimeout(overlay.switchPrev.timer); } catch { /* ignore */ }
+      try {
+        if (overlay.switchPrev.frame !== overlay.frame) overlay.switchPrev.frame.remove();
+      } catch { /* ignore */ }
+      overlay.switchPrev = null;
     }
-    bypassStats.stops++;
-    bypassStats.last = { type: 'stop', reason: String(reason || ''), at: Date.now() };
+    try { overlay.frame.remove(); } catch { /* ignore */ }
+    if (!wasStandby) {
+      const v = overlay.video && overlay.video.isConnected ? overlay.video : mainVideo();
+      // restoreNativeVideos() restores every video's stored state, then the
+      // main video's pre-overlay mute state wins (the stored value can be the
+      // mute we applied in ad-hold/after hiding).
+      restoreNativeVideos();
+      if (v) {
+        try { v.muted = overlay.wasMuted; } catch { /* ignore */ }
+        resumeNative(v, 'now');
+        setTimeout(() => {
+          // A new *hidden standby* must not block the native resume retries;
+          // only a visible/held ad overlay should. Measured: starting the new
+          // standby at ~1s prevented the 1200ms retry and left Twitch paused.
+          if (overlay.frame && !overlay.standby) return;
+          resumeNative(v, '300ms');
+        }, 300);
+        setTimeout(() => {
+          if (overlay.frame && !overlay.standby) return;
+          resumeNative(v, '1200ms');
+          if (v.paused) {
+            try {
+              const btn = document.querySelector('[data-a-target="player-play-pause-button"]');
+              if (btn) btn.click();
+              adLog('native-resume-click', {
+                paused: v.paused,
+                label: btn ? btn.getAttribute('aria-label') : null,
+              });
+            } catch {
+              /* ignore */
+            }
+          }
+        }, 1200);
+      }
+    }
+    if (wasStandby) {
+      bypassStats.lastStandby = { type: 'stop', reason: String(reason || ''), at: Date.now() };
+    } else {
+      bypassStats.stops++;
+      bypassStats.last = { type: 'stop', reason: String(reason || ''), at: Date.now() };
+    }
     overlay.frame = null;
     overlay.token = null;
     overlay.url = null;
@@ -486,19 +570,39 @@
     overlay.rewound = false;
     overlay.revealed = false;
     overlay.nativeHidden = false;
+    overlay.standby = false;
+    overlay.adActive = false;
     // Tell the worker the overlay is gone so a timeout/player-error can retry
     // on a later ad playlist instead of leaving adBypassActive stuck true.
-    try {
-      if (bypassChannel) {
-        bypassChannel.postMessage({ type: 'overlay-stop', page: pageId, reason: String(reason || '') });
+    // Standby shutdowns are invisible to the ad state machine.
+    if (!wasStandby) {
+      try {
+        if (bypassChannel) {
+          bypassChannel.postMessage({ type: 'overlay-stop', page: pageId, reason: String(reason || '') });
+        }
+      } catch {
+        /* overlay is optional */
       }
-    } catch {
-      /* overlay is optional */
     }
+    if (wasStandby && String(reason || '') === 'standby-timeout') requestStandby(800);
   }
 
   function revealOverlay(reason) {
     if (!overlay.frame) return;
+    const wasStandby = overlay.standby;
+    // Revealing adopts the standby into the ad path: from now on ad-end and
+    // overlay-stop behave exactly like a normal clean overlay.
+    if (wasStandby) {
+      bypassStats.starts++;
+      bypassStats.last = { type: 'start', channel: overlay.channel, at: Date.now() };
+      // The standby timeout started at page load; reset it from the ad so a
+      // warm player that has been running for minutes still covers the pod.
+      try { clearTimeout(overlay.timeoutTimer); } catch { /* ignore */ }
+      overlay.timeoutTimer = setTimeout(() => stopAdOverlay('timeout'), 180 * 1000);
+    }
+    overlay.standby = false;
+    overlay.adActive = true;
+    if (wasStandby || reason === 'standby') bypassStats.standbyHits++;
     if (!overlay.revealed) {
       overlay.revealed = true;
       try {
@@ -512,6 +616,13 @@
         rewound: overlay.rewound,
         playing: overlay.playing,
       });
+      if (overlay.switchPrev) {
+        try { clearTimeout(overlay.switchPrev.timer); } catch { /* ignore */ }
+        try {
+          if (overlay.switchPrev.frame !== overlay.frame) overlay.switchPrev.frame.remove();
+        } catch { /* ignore */ }
+        overlay.switchPrev = null;
+      }
     }
     if (!overlay.nativeHidden) {
       hideNativeVideos();
@@ -523,9 +634,10 @@
     }
   }
 
-  function startAdOverlay(url, channel, switchSource = false) {
+  function startAdOverlay(url, channel, switchSource = false, standby = false) {
     if (!AD_OVERLAY_ENABLED) return;
     if (!url) return;
+    const prevWasMuted = overlay.wasMuted;
     if (document.documentElement.getAttribute('data-ko-adblock') === '0') {
       stopAdOverlay('disabled');
       return;
@@ -536,17 +648,32 @@
       if (!overlay.extTimer) {
         overlay.extTimer = setTimeout(() => {
           overlay.extTimer = 0;
-          startAdOverlay(url, channel, switchSource);
+          startAdOverlay(url, channel, switchSource, standby);
         }, 400);
       }
       return;
     }
     if (overlay.frame) {
+      // standby-start never calls this with an existing frame; guard anyway so
+      // a standby can never be reloaded into a visible player.
+      if (standby) return;
       if (switchSource) {
         // 0.8.17: the old hls.js instance can stay stuck in Buffering after an
-        // ad-only playlist (measured on necros). Tear the iframe down and
-        // build a fresh one for the replacement source; this resets the
-        // MediaSource instead of calling loadSource on a wedged instance.
+        // ad-only playlist (measured on necros). Build a fresh iframe for the
+        // replacement source; this resets the MediaSource instead of calling
+        // loadSource on a wedged instance.
+        //
+        // 0.8.26: when the old frame was already visible, keep it underneath
+        // while the replacement decodes. Removing it immediately left ~2.4s of
+        // black (native video was already hidden) during a long Necros pod.
+        if (overlay.switchPrev && overlay.revealed) {
+          // The current frame is visible; it becomes the new fallback, so the
+          // older fallback (if any) can go. If the current frame was not yet
+          // revealed, keep the existing visible fallback through this retry.
+          try { clearTimeout(overlay.switchPrev.timer); } catch { /* ignore */ }
+          try { overlay.switchPrev.frame.remove(); } catch { /* ignore */ }
+          overlay.switchPrev = null;
+        }
         try { clearTimeout(overlay.timeoutTimer); } catch { /* ignore */ }
         try { clearInterval(overlay.positionTimer); } catch { /* ignore */ }
         try { clearTimeout(overlay.adEndTimer); } catch { /* ignore */ }
@@ -563,11 +690,28 @@
           try { overlay.badge.remove(); } catch { /* ignore */ }
           overlay.badge = null;
         }
-        try { overlay.frame.remove(); } catch { /* ignore */ }
+        if (overlay.revealed) {
+          const prev = overlay.frame;
+          try { prev.style.pointerEvents = 'none'; } catch { /* ignore */ }
+          try { prev.style.zIndex = '2147483646'; } catch { /* ignore */ }
+          overlay.switchPrev = {
+            frame: prev,
+            timer: setTimeout(() => {
+              const p = overlay.switchPrev;
+              if (!p) return;
+              try { p.frame.remove(); } catch { /* ignore */ }
+              overlay.switchPrev = null;
+            }, 12000),
+          };
+        } else {
+          try { overlay.frame.remove(); } catch { /* ignore */ }
+        }
         overlay.frame = null;
         overlay.onMessage = null;
         overlay.ready = false;
         overlay.playing = false;
+        overlay.standby = false;
+        overlay.adActive = true;
       } else {
         // A second ad event with a fresher URL: reload the same frame and
         // cancel any pending ad-end grace timer from the previous pod.
@@ -614,7 +758,9 @@
     overlay.url = url;
     overlay.channel = channel || null;
     overlay.video = v;
-    overlay.wasMuted = overlay.held ? overlay.holdWasMuted : v.muted;
+    overlay.wasMuted = switchSource && typeof prevWasMuted === 'boolean'
+      ? prevWasMuted
+      : (overlay.held ? overlay.holdWasMuted : v.muted);
     overlay.held = false;
     overlay.startedAt = Date.now();
     overlay.ready = false;
@@ -623,19 +769,24 @@
     overlay.playing = false;
     overlay.revealed = false;
     overlay.nativeHidden = false;
+    // A standby is a clean player that is already running behind the native
+    // surface; it becomes an ad only when ad-hold/ad-start sets adActive.
+    overlay.standby = !!standby;
+    overlay.adActive = !standby;
     if (!switchSource) overlay.switchTries = 0;
     if (overlay.hideTimer) {
       try { clearTimeout(overlay.hideTimer); } catch { /* ignore */ }
       overlay.hideTimer = 0;
     }
     // Bounded fallback: if hls.js cannot start while the native video is
-    // visible, reveal anyway after 5s. With the 1%-opacity iframe the clean
-    // player usually reports Playing well before this; the timer is only the
-    // safety net that keeps the ad from staying visible forever.
-    overlay.hideTimer = setTimeout(() => {
-      if (!overlay.frame || overlay.revealed) return;
-      revealOverlay('fallback-timeout');
-    }, 5000);
+    // visible, reveal anyway after 5s. A standby must never reveal itself:
+    // it is invisible content, not an ad, so it has no fallback timer.
+    if (!standby) {
+      overlay.hideTimer = setTimeout(() => {
+        if (!overlay.frame || overlay.revealed) return;
+        revealOverlay('fallback-timeout');
+      }, 5000);
+    }
 
     // Small, non-interactive indicator so the reduced-quality player is not
     // mistaken for a broken Twitch player. Positioned in positionOverlay().
@@ -687,6 +838,13 @@
         // master instead of leaving hls.js in Buffering.
         bypassStats.adOnly = (bypassStats.adOnly || 0) + 1;
         bypassStats.lastAdOnly = { d: m.d, at: Date.now() };
+        if (overlay.standby) {
+          // A standby whose token went ad-only is useless. Tear it down and
+          // probe a fresh clean master; the ad path remains normal meanwhile.
+          stopAdOverlay('standby-ad-only');
+          requestStandby(600, true);
+          return;
+        }
         if (overlay.badge) overlay.badge.textContent = 'sem anúncio · trocando fonte limpa…';
         try {
           bypassChannel?.postMessage({ type: 'need-source', page: pageId, channel: overlay.channel || null });
@@ -697,10 +855,24 @@
       }
       if (m.t === 'ev' && m.e === 'error') {
         bypassStats.errors++;
+        if (overlay.standby) {
+          stopAdOverlay('standby-player-error');
+          requestStandby(2000, true);
+          return;
+        }
         stopAdOverlay('player-error');
         return;
       }
       if (m.t === 'ev' && m.e === 'firstframe') {
+        // A standby stays hidden: first frame only marks it ready. During an
+        // ad (adActive) the same frame is used to reveal the clean picture.
+        if (overlay.standby && !overlay.adActive) {
+          if (!overlay.playing) bypassStats.standbyReady++;
+          overlay.playing = true;
+          try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
+          overlay.watchdogTimer = 0;
+          return;
+        }
         // The clean player has produced its first frame. Swap now: this is the
         // seam where the native frame is replaced by the clean frame.
         revealOverlay('firstframe');
@@ -708,9 +880,15 @@
       }
       if (m.t === 'st' && m.st) {
         if (m.st.state === 'Playing') {
+          const wasPlaying = overlay.playing;
           overlay.playing = true;
           try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
           overlay.watchdogTimer = 0;
+          if (overlay.standby && !overlay.adActive) {
+            // Warm and hidden. Do not cover the native video or show a badge.
+            if (!wasPlaying) bypassStats.standbyReady++;
+            return;
+          }
           // The clean player is actually running: now it is safe to cover the
           // native video. Before this point the native stays visible.
           revealOverlay('playing');
@@ -772,10 +950,19 @@
     overlay.positionTimer = setInterval(positionOverlay, 500);
     // Safety net if Twitch stops requesting playlists while its <video> is
     // hidden. Long ad pods are common; the two-clean-playlist `ad-end` is the
-    // normal stop, this only guards a stuck overlay.
-    overlay.timeoutTimer = setTimeout(() => stopAdOverlay('timeout'), 180 * 1000);
-    bypassStats.starts++;
-    bypassStats.last = { type: 'start', channel: overlay.channel, at: Date.now() };
+    // normal stop. A standby is long-lived; 5min bounds its stale URL/token
+    // while still covering many midrolls.
+    overlay.timeoutTimer = setTimeout(
+      () => stopAdOverlay(standby ? 'standby-timeout' : 'timeout'),
+      (standby ? 300 : 180) * 1000
+    );
+    if (standby) {
+      bypassStats.standbyStarts++;
+      bypassStats.lastStandby = { type: 'start', channel: overlay.channel, at: Date.now() };
+    } else {
+      bypassStats.starts++;
+      bypassStats.last = { type: 'start', channel: overlay.channel, at: Date.now() };
+    }
     // The bridge may already be listening; the 'ready' handler covers a slow
     // iframe. Sending here too avoids a race on warm starts.
     setTimeout(() => {
@@ -804,7 +991,14 @@
       }
       if (msg.type === 'ad-hold') {
         if (!AD_OVERLAY_ENABLED) return;
-        if (overlay.frame) {
+        // SPA channel switch: never reveal the previous channel's hidden
+        // player. Drop it and fall through to the normal cold-start path.
+        if (overlay.standby) {
+          const sc = String(overlay.channel || '').toLowerCase();
+          const pc = pageChannel();
+          if (sc && pc && sc !== pc) stopAdOverlay('standby-channel-change');
+        }
+        if (overlay.frame && !overlay.standby) {
           try { clearTimeout(overlay.adEndTimer); } catch { /* ignore */ }
           overlay.adEndTimer = 0;
           overlay.adEndTries = 0;
@@ -832,16 +1026,59 @@
         } catch {
           /* ignore */
         }
+        overlay.adActive = true;
+        // A warm standby is already playing the clean live edge. Reveal it
+        // now: this is the 0s path. If it is not Playing yet, ad-start will
+        // rebuild a normal overlay with the fresh source.
+        if (overlay.standby && overlay.playing) {
+          revealOverlay('standby');
+        }
         return;
       }
       if (msg.type === 'ad-start') {
         if (!AD_OVERLAY_ENABLED) return;
+        if (overlay.frame && overlay.standby) {
+          overlay.adActive = true;
+          if (overlay.playing) {
+            revealOverlay('standby');
+          } else {
+            // Standby exists but never reached Playing (cold start, private
+            // token, slow segment). Replace it with the normal ad overlay.
+            startAdOverlay(msg.url, msg.channel, true);
+          }
+          return;
+        }
+        if (overlay.frame && overlay.revealed) {
+          if (msg.switch) startAdOverlay(msg.url, msg.channel, true);
+          return;
+        }
         startAdOverlay(msg.url, msg.channel, !!msg.switch);
         return;
       }
       if (msg.type === 'ad-end') {
         if (!AD_OVERLAY_ENABLED) return;
         finishAdOverlay();
+        return;
+      }
+      if (msg.type === 'standby-start') {
+        if (!AD_OVERLAY_ENABLED || !AD_STANDBY_ENABLED) return;
+        // Ignore stale handoffs and never start over an ad, another overlay,
+        // or a hidden tab. The worker re-posts on the next prewarm.
+        if (msg.at && Date.now() - msg.at > 120000) return;
+        const mc = String(msg.channel || '').toLowerCase();
+        const pc = pageChannel();
+        if (!mc || (pc && mc !== pc)) return;
+        if (overlay.frame) {
+          // SPA channel switch: the hidden player still shows the previous
+          // channel. Replace it instead of revealing stale video on an ad.
+          if (!overlay.standby) return;
+          if (String(overlay.channel || '').toLowerCase() === mc) return;
+          stopAdOverlay('standby-channel-change');
+        }
+        if (overlay.held || overlay.adActive) return;
+        if (document.visibilityState !== 'visible') return;
+        if (!mainVideo()) return;
+        startAdOverlay(msg.url, msg.channel, false, true);
         return;
       }
       if (msg.type === 'ad-fail') {
@@ -1174,6 +1411,19 @@
           debugLog('bypass.overlayStop', { reason: String(msg.reason || '').slice(0, 60) });
         } else if (msg.type === 'need-source' && adBypassActive) {
           switchCleanSource(msg.channel || lastChannel);
+        } else if (msg.type === 'standby-request') {
+          // Page asks for a hidden clean player (after ad-end, tab visible,
+          // or a standby token went bad). Re-use a fresh prewarm or probe.
+          const ch = msg.channel || lastChannel;
+          if (!ch || adBypassActive || bypassBusy) return;
+          if (msg.force && !prewarm.busy) {
+            prewarm = { channel: null, url: null, at: 0, busy: false };
+          }
+          if (prewarm.channel === ch && prewarm.url && Date.now() - prewarm.at < PREWARM_TTL) {
+            postBypass({ type: 'standby-start', channel: ch, url: prewarm.url });
+          } else {
+            prewarmCleanSource(ch);
+          }
         }
       };
     }
@@ -1397,6 +1647,15 @@
     let prewarmBusyChannel = null;
     let prewarmPromise = null;
 
+    // Advertise a warm clean URL to the page. The page decides whether it can
+    // start the hidden player (visible tab, no active ad/overlay). Never
+    // advertise while an ad is being bypassed or probed.
+    function postStandbyStart(channel, url) {
+      if (!channel || !url) return;
+      if (adBypassActive || bypassBusy) return;
+      postBypass({ type: 'standby-start', channel, url });
+    }
+
     // A DNS/TLS hang while probing must not leave the native player muted for
     // the rest of the ad. The probe itself keeps running, but the caller gets
     // null and restores the native player / asks the watchdog to retry.
@@ -1443,6 +1702,7 @@
           if (url) {
             prewarm = { channel, url, at: Date.now(), busy: false };
             debugLog('prewarm.ok', { channel });
+            postStandbyStart(channel, url);
           } else {
             prewarm.busy = false;
             debugLog('prewarm.fail', { channel });

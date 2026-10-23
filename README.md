@@ -96,7 +96,7 @@ A extensão faz três coisas, nesta ordem:
 
 Durante o intervalo, o frame limpo é **360p**. Fora do anúncio, o player nativo volta para a qualidade que você escolheu (até 1080p).
 
-Isso é de propósito: os tokens HD do site viram “só anúncio” no meio de um pod longo. Usar HD nessa hora é o caminho que já causou tela preta e travamento. 360p limpo é melhor do que anúncio ou freeze.
+Isso é de propósito: em intervalos longos, a fonte em HD pode virar “só anúncio”. Foi isso que já causou tela preta e travamento. Por isso, durante o intervalo, o frame limpo fica em 360p — e o player nativo volta à sua qualidade quando o intervalo termina.
 
 ---
 
@@ -106,7 +106,7 @@ Isso é de propósito: os tokens HD do site viram “só anúncio” no meio de 
 |----------|-------------|
 | Atualizei a extensão e o comportamento antigo continua | Recarregue a aba da Twitch com **F5**. O content script só troca no próximo carregamento. |
 | Fiquei sem áudio depois do anúncio | Confirme que está na **0.8.29** ou mais novo e dê **F5**. A versão 0.8.29 restaura volume + mudo; antes disso o volume ficava em 0. |
-| Apareceu um anúncio | Em um pré-roll a frio, o anúncio nativo pode aparecer **mudo** por alguns segundos enquanto o frame limpo fica pronto. Isso é preferível a uma tela preta. Se acontecer no meio de um pod longo, verifique se o toggle **Twitch adblock** está ligado. |
+| Apareceu um anúncio | No anúncio antes da live, o anúncio nativo pode aparecer **mudo** por alguns segundos enquanto o frame limpo fica pronto. Isso é preferível a uma tela preta. Se acontecer no meio de um intervalo longo, verifique se o toggle **Twitch adblock** está ligado. |
 | Tela preta ou player travado | A extensão tenta voltar para o player nativo quando o frame limpo não chega a `Playing`. Se persistir, dê **F5** e desligue o overlay para isolar o problema. |
 | Kick ou YouTube não aparece | Confira se o canal está ao vivo e se o slug/URL está certo. O mapeamento é por canal e fica salvo. |
 | Quero conferir a versão | Abra `chrome://extensions` e veja o número embaixo do nome. A versão validada é **0.8.29**. |
@@ -153,7 +153,7 @@ O harness sobe um perfil separado (porta 9335) para não mexer no seu Chrome. O 
 ## Limitações conhecidas
 
 - **Anúncio de live:** durante o intervalo, o frame limpo é 360p. Fora do anúncio, o player nativo volta à qualidade escolhida.
-- **Pré-roll a frio:** o anúncio nativo pode aparecer mudo por alguns segundos até o frame limpo ficar pronto. A alternativa seria uma tela preta, que foi descartada.
+- **Anúncio antes da live:** o anúncio nativo pode aparecer mudo por alguns segundos até o frame limpo ficar pronto. A alternativa seria uma tela preta, que foi descartada.
 - **Twitch muda com frequência:** se o Twitch mudar o formato do SSAI, o adblock pode parar de funcionar até uma atualização. O log em `ADBLOCK-FINDINGS.md` existe para facilitar o diagnóstico.
 - **VOD:** o bloqueio é de CSAI; se o Twitch mudar a entrega, pode ser necessário ajustar os hosts bloqueados.
 - **A extensão não é afiliada** à Twitch, Kick ou YouTube.

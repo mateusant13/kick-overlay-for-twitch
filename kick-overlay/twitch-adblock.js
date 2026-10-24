@@ -177,6 +177,7 @@
     switchTries: 0,
     watchdogTimer: 0,
     stallTimer: 0,
+    adoptTimer: 0,
     switchPrev: null,
     badge: null,
     unmuteHandler: null,
@@ -203,6 +204,7 @@
   // request asks it to re-use a fresh prewarm or probe a new one, after an ad
   // or when the tab becomes visible again. It never starts anything directly.
   let standbyRequestTimer = 0;
+  let lastStandbyRequestAt = 0;
   function pageChannel() {
     try {
       return (location.pathname.split('/').filter(Boolean)[0] || '').toLowerCase();
@@ -210,7 +212,24 @@
       return '';
     }
   }
+  function isChannelPath() {
+    try {
+      const parts = location.pathname.split('/').filter(Boolean);
+      if (parts.length !== 1) return false;
+      return !/^(directory|downloads|friends|gift|jobs|login|notifications|search|settings|subscriptions|inventory|wallet|drops|video|videos|p|turbo|store|legal|privacy|about|embed|popout|moderator|dashboard|creatorcamp|security|activate|signup|messages|whispers)$/i.test(parts[0]);
+    } catch {
+      return false;
+    }
+  }
   function requestStandby(delay = 1200, force = false) {
+    // A standby that keeps failing (offline channel, bad token) must not turn
+    // into a mint/error loop. Normal requests still re-post immediately and
+    // do not arm the cooldown, so recovery after an ad is not delayed.
+    if (force) {
+      const now = Date.now();
+      if (now - lastStandbyRequestAt < 4000) return;
+      lastStandbyRequestAt = now;
+    }
     try { clearTimeout(standbyRequestTimer); } catch { /* ignore */ }
     standbyRequestTimer = setTimeout(() => {
       standbyRequestTimer = 0;
@@ -219,7 +238,7 @@
         bypassChannel?.postMessage({
           type: 'standby-request',
           page: pageId,
-          channel: null,
+          channel: pageChannel() || null,
           force: !!force,
         });
       } catch {
@@ -516,6 +535,8 @@
     overlay.adEndTimer = 0;
     try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
     overlay.watchdogTimer = 0;
+    try { clearTimeout(overlay.adoptTimer); } catch { /* ignore */ }
+    overlay.adoptTimer = 0;
     clearOverlayStall();
     if (overlay.hideTimer) {
       try { clearTimeout(overlay.hideTimer); } catch { /* ignore */ }
@@ -638,6 +659,8 @@
 
   function revealOverlay(reason) {
     if (!overlay.frame) return;
+    try { clearTimeout(overlay.adoptTimer); } catch { /* ignore */ }
+    overlay.adoptTimer = 0;
     const wasStandby = overlay.standby;
     // Revealing adopts the standby into the ad path: from now on ad-end and
     // overlay-stop behave exactly like a normal clean overlay.
@@ -691,6 +714,8 @@
     // A stall timer belongs to the previous frame/source. Starting a new
     // overlay/switch invalidates it; the new frame gets its own.
     clearOverlayStall();
+    try { clearTimeout(overlay.adoptTimer); } catch { /* ignore */ }
+    overlay.adoptTimer = 0;
     if (document.documentElement.getAttribute('data-ko-adblock') === '0') {
       stopAdOverlay('disabled');
       return;
@@ -783,7 +808,10 @@
       }
     }
     const v = mainVideo();
-    if (!v) return;
+    // A standby may win the race against Twitch's <video> element. Start the
+    // hidden player anyway; positionOverlay() attaches it once the native
+    // player exists. The normal ad path still waits for the native surface.
+    if (!v && !standby) return;
     const extId = document.documentElement.getAttribute('data-ko-ext-id');
     const token = crypto.randomUUID();
     const frame = document.createElement('iframe');
@@ -797,7 +825,7 @@
     // made Chrome treat the clean player as occluded and hls.js never left
     // rs=0 (measured). 1% black over the native frame is imperceptible and
     // lets hls.js decode; on Playing we switch to opacity 1 and hide native.
-    frame.style.cssText = 'position:fixed;z-index:2147483647;border:0;background:#000;opacity:0.01;pointer-events:none;';
+    frame.style.cssText = 'position:fixed;z-index:2147483647;border:0;background:#000;opacity:0.01;pointer-events:none;left:0;top:0;width:100%;height:100%;';
     frame.addEventListener('load', () => {
       bypassStats.frameLoads = (bypassStats.frameLoads || 0) + 1;
     });
@@ -813,10 +841,10 @@
     overlay.video = v;
     overlay.wasMuted = switchSource && typeof prevWasMuted === 'boolean'
       ? prevWasMuted
-      : (overlay.held ? overlay.holdWasMuted : v.muted);
+      : (overlay.held ? overlay.holdWasMuted : (v ? v.muted : false));
     overlay.wasVolume = switchSource && Number.isFinite(prevWasVolume)
       ? prevWasVolume
-      : (overlay.held ? overlay.holdVolume : v.volume);
+      : (overlay.held ? overlay.holdVolume : (v ? v.volume : 1));
     overlay.held = false;
     overlay.startedAt = Date.now();
     overlay.ready = false;
@@ -1134,10 +1162,11 @@
         }
         overlay.adActive = true;
         // A warm standby is already playing the clean live edge. Reveal it
-        // now: this is the 0s path. If it is not Playing yet, ad-start will
-        // rebuild a normal overlay with the fresh source.
-        if (overlay.standby && overlay.playing) {
-          revealOverlay('standby');
+        // now: this is the 0s path. If it is still buffering, adopt it here:
+        // adActive makes the Playing handler reveal it without waiting for
+        // ad-start, which is one more round trip in the cold path.
+        if (overlay.standby) {
+          if (overlay.playing) revealOverlay('standby');
         }
         return;
       }
@@ -1147,10 +1176,25 @@
           overlay.adActive = true;
           if (overlay.playing) {
             revealOverlay('standby');
-          } else {
-            // Standby exists but never reached Playing (cold start, private
-            // token, slow segment). Replace it with the normal ad overlay.
-            startAdOverlay(msg.url, msg.channel, true);
+            return;
+          }
+          // The standby was already buffering before ad-start. A young
+          // standby has no chance, so rebuild almost immediately; an older
+          // one is often one segment away from Playing, so give it enough
+          // time to win before throwing away its decoded buffer.
+          const standbyAge = Date.now() - (overlay.startedAt || 0);
+          const graceMs = standbyAge >= 1200 ? 900 : 300;
+          if (!overlay.adoptTimer) {
+            overlay.adoptTimer = setTimeout(() => {
+              overlay.adoptTimer = 0;
+              if (!overlay.frame || !overlay.standby || !overlay.adActive || overlay.playing) return;
+              startAdOverlay(msg.url, msg.channel, true);
+            }, graceMs);
+          }
+          try {
+            overlaySend({ t: 'play' });
+          } catch {
+            /* iframe may not be ready */
           }
           return;
         }
@@ -1183,7 +1227,9 @@
         }
         if (overlay.held || overlay.adActive) return;
         if (document.visibilityState !== 'visible') return;
-        if (!mainVideo()) return;
+        // Do not require the native <video> here: on a fast prewarm the clean
+        // URL can be ready before Twitch creates its player. positionOverlay()
+        // attaches the hidden frame once the native surface exists.
         startAdOverlay(msg.url, msg.channel, false, true);
         return;
       }
@@ -1194,6 +1240,17 @@
     };
   } catch {
     /* overlay is optional */
+  }
+
+  // Cold preroll: ask the worker to mint the clean source before Twitch asks
+  // for the live master. The master hook is the earliest reliable point, but
+  // it still lands after navigation; these retries cover the window where the
+  // worker hook is still installing.
+  if (isChannelPath()) {
+    setTimeout(() => requestStandby(0), 200);
+    setTimeout(() => requestStandby(0), 1000);
+    setTimeout(() => requestStandby(0), 2500);
+    setTimeout(() => requestStandby(0), 5000);
   }
 
   // The ISOLATED bridge (adblock-bridge.js) mirrors the user's toggle into
@@ -1666,7 +1723,7 @@
     // The 2026 TwitchAdSolutions forks put popout/site/mobile_web first and
     // use autoplay only as a last resort: autoplay is 360p and can get stuck
     // in a loading loop when used as a long-lived backup. We keep it last.
-    async function findCleanHlsUrl(channel, preferFallback = false, prewarmMode = false) {
+    async function findCleanHlsUrl(channel, preferFallback = false, prewarmMode = false, firstUrl = null, firstMaster = null) {
       const types = prewarmMode
         ? [
             // Prewarm should maximize the chance the token is still clean
@@ -1703,13 +1760,24 @@
             ['mobile', 'android'],
             ['embed', 'web'],
           ];
+      let usedFirstUrl = false;
       for (const [playerType, platform] of types) {
         try {
-          const url = await mintMasterUrl(channel, playerType, platform);
+          let url;
+          let master = null;
+          if (!usedFirstUrl && firstUrl) {
+            url = firstUrl;
+            master = firstMaster;
+            usedFirstUrl = true;
+          } else {
+            url = await mintMasterUrl(channel, playerType, platform);
+          }
           if (!url) continue;
-          const mr = await realFetch(url, { credentials: 'omit' });
-          if (!mr.ok) continue;
-          const master = await mr.text();
+          if (!master) {
+            const mr = await realFetch(url, { credentials: 'omit' });
+            if (!mr.ok) continue;
+            master = await mr.text();
+          }
           const variants = parseVariants(master);
           for (const variant of variants.slice(0, 1)) {
             let variantUrl = variant;
@@ -1812,13 +1880,43 @@
           // prewarmMode starts with autoplay/android: it is the only measured
           // clean-during-SSAI type. Starting a hidden HD web token here is what
           // made the warm standby go ad-only in the middle of the Necros pod.
-          const url = await withTimeout(findCleanHlsUrl(channel, true, true), 8000);
+          //
+          // Start the hidden player as soon as the autoplay master URL exists
+          // and responds OK, before probing its first variant. hls.js fetches
+          // that variant anyway and its own ad filter strips stitched
+          // segments; the full probe below still verifies the URL for later
+          // prewarm hits. On a cold preroll this moves the standby ~1s earlier.
+          let fastUrl = null;
+          let fastMaster = null;
+          try {
+            fastUrl = await withTimeout(mintMasterUrl(channel, 'autoplay', 'android'), 4000);
+            // A minted URL can still 403 (offline channel, bad signature).
+            // Check the master before handing it to the hidden player; this
+            // is one round trip, not the full variant probe. Keep the body so
+            // the probe below does not fetch the same master again.
+            if (fastUrl) {
+              const mr = await withTimeout(realFetch(fastUrl, { credentials: 'omit' }), 4000);
+              if (mr && mr.ok) fastMaster = await mr.text();
+              else fastUrl = null;
+            }
+          } catch {
+            fastUrl = null;
+            fastMaster = null;
+          }
+          if (fastUrl) {
+            // Keep `busy` set: the full probe is still running. Only the URL
+            // is published early so the page can start its hidden player.
+            prewarm = { channel, url: fastUrl, at: Date.now(), busy: true };
+            debugLog('prewarm.fast', { channel });
+            postStandbyStart(channel, fastUrl);
+          }
+          const url = await withTimeout(findCleanHlsUrl(channel, true, true, fastUrl, fastMaster), 8000);
           if (url) {
             prewarm = { channel, url, at: Date.now(), busy: false };
             debugLog('prewarm.ok', { channel });
-            postStandbyStart(channel, url);
+            if (!fastUrl) postStandbyStart(channel, url);
           } else {
-            prewarm.busy = false;
+            prewarm = { channel: null, url: null, at: 0, busy: false };
             debugLog('prewarm.fail', { channel });
           }
         } catch (e) {
@@ -2080,9 +2178,9 @@
           } catch {
             /* ignore */
           }
-          // Start the prewarm as soon as the live master appears: this is the
-          // earliest point where the channel is known, and it buys the most
-          // of the ~4s content grace before a preroll.
+          // Fallback prewarm for SPA channel switches and for pages where the
+          // document_start request did not reach the worker. A plain cold open
+          // already asked from the pathname before this master arrived.
           if (lastChannel) prewarmCleanSource(lastChannel);
           let tokenRaw = null;
           try { tokenRaw = new URL(url).searchParams.get('token'); } catch {}

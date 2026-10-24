@@ -1,6 +1,6 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.30**, persistent profile
+Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.31**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
 CDP port 9222 (user Chrome) and 9335 (separate Edge test harness). Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
@@ -1282,3 +1282,49 @@ is called stable.
 color (YouTube red; Kick stays green) and adds the YouTube-to-Kick fallback
 when a selected YouTube source is missing or not live. The 0.8.29 adblock
 validation above still applies.
+
+## 0.8.31 (2026-10-23): faster cold-preroll standby
+
+The complaint was that a cold open still showed the muted native ad long
+enough to look like the ad would play in full, which invited a manual F5.
+The slow part was not ad detection; it was the clean standby becoming
+healthy. Three changes move that earlier:
+
+1. **Early prewarm requests.** The page asks for a prewarm from the channel
+   in the pathname at 200ms, 1s, 2.5s and 5s after load. The live-master hook
+   remains the fallback for SPA switches and when the early request did not
+   reach the worker yet.
+2. **Fast standby handoff.** `prewarmCleanSource()` mints `autoplay/android`,
+   checks that the master responds OK, publishes that URL and posts
+   `standby-start` immediately. The full variant probe keeps running and
+   replaces the cached URL when it finds a different clean source. A minted
+   URL that 403s is discarded before it reaches the player, so an offline
+   channel does not create a mint/error loop.
+3. **Player and adoption tuning.** `startLevel: 0` makes the Twitch HLS
+   standby begin at the lowest rendition instead of racing a 1080p segment.
+   A standby may start before Twitch creates its `<video>`; the hidden frame
+   is a full-viewport 1% surface until `positionOverlay()` attaches it.
+   `ad-hold` marks a buffering standby as adoptable, and `ad-start` gives a
+   young standby 300ms or one older than 1.2s up to 900ms to reach healthy
+   `Playing` before rebuilding.
+
+Measured in the separate Edge profile (9335), same code:
+
+- Warm standby, synthetic `ad-hold` at 8.5s: reveal after **547ms**.
+- Warm standby, synthetic `ad-hold` + `ad-start` at 8.5s: reveal after
+  **136ms**.
+- `alanzoka`: `prewarm.fast` at 3.3s, frame at 3.4-3.9s, standby healthy
+  later; no preroll occurred in the 38s run.
+- `rodil`: real prerolls at 3.3s and 4.3s, fast prewarm at 2.6s and 3.3s.
+  The standby was only 0.26-0.45s old, so it was rebuilt; overlay revealed
+  at 6.8-7.8s. This is the remaining worst case: an ad that arrives before
+  the standby is healthy cannot be covered without a frozen/black frame.
+- `duda` (offline): no fast URL, no standby, no retry loop after the master
+  check and the 4s forced-retry cooldown.
+
+Not yet measured: a real cold preroll in the owner's Chrome on 0.8.31. The
+earlier owner baseline had `prewarm.ok` at 4.47s, `ad-start` at 5.19s and
+reveal at 7.34s. The fast path is intended to move the standby well before
+that 5.19s mark; the owner needs to F5 a real live to confirm the practical
+window. A manual F5 is still not part of the design: the page never reloads
+itself.

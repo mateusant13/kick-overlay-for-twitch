@@ -196,6 +196,10 @@ if (HLS_MODE) {
         liveSyncDurationCount: 1,
         liveBackBufferLength: 15,
         startPosition: -1,
+        // Start on the lowest rendition. A cold standby on the native master
+        // otherwise races a 1080p segment download before the preroll lands;
+        // ABR can step up after the first clean frame.
+        startLevel: 0,
         pLoader: TwitchAdFilterLoader,
       }
     : {

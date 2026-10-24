@@ -2,7 +2,8 @@
 
 **Status: COMPLETE.** Version **0.8.29** was validated by the owner in real use
 on 2026-10-23. Version **0.8.30** adds two follow-up fixes for YouTube mode and
-the YouTube-to-Kick fallback. There are no open items.
+the YouTube-to-Kick fallback. Version **0.8.31** speeds up the cold preroll
+standby. There are no open code items; one owner validation remains.
 
 The detailed evidence for every fix is in
 `kick-overlay/ADBLOCK-FINDINGS.md`. Older revisions of this TODO, including the
@@ -43,6 +44,36 @@ investigations that led to 0.8.8-0.8.29, remain in the git history.
   YouTube at 1080p with a red bar; `FaturetoSL` with no YouTube mapping fell
   back to a live Kick player.
 
+## Follow-up 0.8.31 (2026-10-23)
+
+- [x] The page asks for a prewarm from the channel in the pathname at 200ms,
+  1s, 2.5s and 5s. The live-master hook remains the fallback for SPA switches
+  and for loads where the early request did not reach the worker.
+- [x] `prewarmCleanSource()` posts a standby as soon as the `autoplay/android`
+  master URL is minted and the master responds OK, before fetching its first
+  variant. The full variant probe still runs and replaces the cached URL when
+  it finds a different clean source.
+- [x] A standby can start before Twitch creates its `<video>`; the hidden frame
+  uses a full-viewport 1% surface and `positionOverlay()` attaches it to the
+  player container once the native video exists.
+- [x] Twitch HLS starts on the lowest rendition (`startLevel: 0`), so a cold
+  standby does not race a 1080p segment before the preroll.
+- [x] `ad-hold` adopts a buffering standby (`adActive`), and `ad-start` gives
+  a young standby 300ms or an older one 900ms to reach healthy `Playing`
+  before rebuilding. Timers are cleared on reveal, stop and new overlays.
+- [x] Forced standby retries have a 4s cooldown; a minted fast URL is checked
+  against the master before it reaches the player, so an offline channel does
+  not create a mint/error loop.
+- [x] Edge checks: synthetic `ad-hold` + `ad-start` with a warm standby
+  revealed in **136-547ms**; real `rodil` prerolls at 3.3s and 4.3s still
+  rebuilt because the ad beat the 2.6-3.3s fast prewarm; `alanzoka` had no
+  preroll but its standby became healthy; offline `duda` produced no standby
+  or retry loop.
+- [ ] Owner needs to F5 a real cold open on 0.8.31. The cold window is now
+  shorter, but an ad that lands before the standby is healthy can still show
+  muted native video. That tradeoff is deliberate: a frozen/black cover was
+  rejected.
+
 ## Delivered
 
 - [x] Isolated test harness (separate profile/port; never the visible Chrome).
@@ -71,9 +102,11 @@ investigations that led to 0.8.8-0.8.29, remain in the git history.
 - **Live ad quality:** the clean overlay is 360p during an ad pod; the native
   player returns to the selected quality (up to 1080p) when the pod ends. This
   is intentional: it avoids the HD-token-goes-ad-only path that caused freezes.
-- **Cold preroll:** the native ad can be visible and muted for a few seconds
-  while the clean player reaches a healthy `Playing`. A frozen clean frame is
-  deliberately avoided.
+- **Cold preroll:** the native ad can still be visible and muted for a short
+  window while the clean player reaches a healthy `Playing`. 0.8.31 starts the
+  prewarm earlier and posts the standby before the full probe, but an ad that
+  arrives before the standby is healthy cannot be covered without showing a
+  frozen frame, which is deliberately avoided.
 - **Twitch changes:** if Twitch changes the SSAI format, the adblock may need an
   update. The findings log is the starting point for diagnosis.
 - **VOD:** the block targets CSAI requests; a future Twitch delivery change may

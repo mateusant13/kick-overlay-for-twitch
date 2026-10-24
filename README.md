@@ -128,9 +128,9 @@ A página **não recarrega sozinha**. A extensão não usa F5 automático nem �
 
 O que acontece:
 
-1. Assim que a live abre, a extensão começa a preparar um player limpo escondido (o standby).
-2. Se o anúncio chegar antes desse player ficar pronto, o anúncio nativo aparece **mudo** por alguns segundos.
-3. Quando o standby estiver tocando de verdade, ele cobre o anúncio.
+1. Assim que a live abre, a extensão começa a preparar um player limpo escondido (o standby). Ela não espera o primeiro playlist nem a verificação completa: o standby começa assim que o endereço limpo é criado.
+2. Se o anúncio chegar no mesmo instante em que a página ainda está carregando, o anúncio nativo pode aparecer **mudo** por instantes.
+3. Quando o standby fica saudável, ele cobre o anúncio. Em geral isso leva menos de 1 segundo depois que o anúncio começa, mas depende da rede.
 4. Se o standby não ficar saudável, a extensão mantém ou devolve o player nativo em vez de deixar uma tela preta.
 
 Ou seja: o “buffer” já acontece em paralelo, num player separado. Não precisa dar F5. Recarregar a página só reinicia a espera e pode trazer o anúncio de novo. Se o anúncio aparecer no meio da live, o processo é o mesmo.
@@ -143,7 +143,7 @@ Ou seja: o “buffer” já acontece em paralelo, num player separado. Não prec
 |----------|-------------|
 | Atualizei a extensão e o comportamento antigo continua | Recarregue a aba da Twitch com **F5**. O content script só troca no próximo carregamento. |
 | Fiquei sem áudio depois do anúncio | Confirme que está na **0.8.29** ou mais novo e dê **F5**. A versão 0.8.29 restaura volume + mudo; antes disso o volume ficava em 0. |
-| Apareceu um anúncio | No anúncio antes da live, o anúncio nativo pode aparecer **mudo** por alguns segundos enquanto o frame limpo fica pronto. Isso é preferível a uma tela preta. Se acontecer no meio de um intervalo longo, verifique se o toggle **Twitch adblock** está ligado. |
+| Apareceu um anúncio | No anúncio antes da live, ele ainda pode aparecer **mudo** por instantes se chegar junto com o carregamento. A extensão começa o standby mais cedo e cobre assim que ele fica saudável; isso é preferível a uma tela preta. Se acontecer no meio de um intervalo longo, verifique se o toggle **Twitch adblock** está ligado. |
 | Tela preta ou player travado | A extensão tenta voltar para o player nativo quando o frame limpo não chega a `Playing`. Se persistir, dê **F5** e desligue o overlay para isolar o problema. |
 | Kick ou YouTube não aparece | Confira se o canal está ao vivo e se o nome/URL está certo. Se o streamer faz multi stream, confirme no popup se o canal da Kick/YouTube é o mesmo que ele está usando. O mapeamento é por canal e fica salvo. |
 | Escolhi YouTube, mas apareceu o player da Kick | O YouTube não foi encontrado ou não estava ao vivo, então a extensão usou o fallback para a Kick. Confira a URL, o `@handle` ou o ID. A barra fica verde no Kick e vermelha no YouTube. |
@@ -192,7 +192,7 @@ O harness sobe um perfil separado (porta 9335) para não mexer no seu Chrome. O 
 ## O que ele ainda não resolve
 
 - **Anúncio de live:** durante o intervalo, o frame limpo é 360p. Fora do anúncio, o player nativo volta à qualidade escolhida.
-- **Anúncio antes da live:** o anúncio nativo pode aparecer mudo por alguns segundos até o frame limpo ficar pronto. A alternativa seria uma tela preta, que foi descartada.
+- **Anúncio antes da live:** se o anúncio chegar junto com o carregamento, ele ainda pode aparecer mudo por instantes. A extensão começa o standby mais cedo e cobre assim que ele fica saudável; a alternativa seria uma tela preta, que foi descartada.
 - **Twitch muda com frequência:** se o Twitch mudar o formato do SSAI, o adblock pode parar de funcionar até uma atualização. O log em `ADBLOCK-FINDINGS.md` existe para facilitar o diagnóstico.
 - **VOD:** o bloqueio é de CSAI; se o Twitch mudar a entrega, pode ser necessário ajustar os hosts bloqueados.
 - **A extensão não é afiliada** à Twitch, Kick ou YouTube.

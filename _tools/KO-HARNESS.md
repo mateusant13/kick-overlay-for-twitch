@@ -70,7 +70,8 @@ does not touch the live profile. It checks:
 - no `location.reload`, `location.href = location.href`, or meta refresh;
 - the cold-open markers (`prewarm.fast`, early retry times, grace timer,
   `startLevel: 0`);
-- the 1:1 research and official-site shortcut are documented;
+- the 1:1 research and official-site shortcut are documented, in Portuguese and English;
+- the banned slogan from `AGENTS.md` does not return to either README;
 - the bug ledger schema and the independent-verifier rule.
 
 It also executes two **negative arms**: the auto-refresh detector must reject

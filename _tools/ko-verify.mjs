@@ -140,13 +140,43 @@ check('cold-contract.neg-arm', () => {
 // ---- 5. docs / product decision ------------------------------------------
 check('docs', () => {
   assert(existsSync(path.join(EXT, 'PLAYER-1TO1-RESEARCH.md')), 'missing player 1:1 research');
+  assert(existsSync(path.join(ROOT, 'README.en.md')), 'missing English README');
   const readme = read('README.md');
   assert(readme.includes('Abrir no site oficial'), 'README does not mention the official-site shortcut');
   assert(readme.includes('PLAYER-1TO1-RESEARCH.md'), 'README does not point to the research');
   return 'research + official-site shortcut documented';
 });
 
-// ---- 6. bug ledger -------------------------------------------------------
+// ---- 6. copy tone --------------------------------------------------------
+// AGENTS.md forbids this slogan. Keep it out of both READMEs; the negative arm
+// proves the detector actually catches the phrase.
+const BANNED_TONE = [
+  'Twitch no centro',
+  'Kick e YouTube no vídeo',
+  'Anúncios fora do caminho',
+  'Twitch at the center',
+  'Kick and YouTube in the video',
+  'Ads out of the way',
+];
+function bannedToneHits(text) {
+  return BANNED_TONE.filter((phrase) => text.includes(phrase));
+}
+check('copy-tone', () => {
+  const files = ['README.md', 'README.en.md'].filter((rel) => existsSync(path.join(ROOT, rel)));
+  const hits = [];
+  for (const rel of files) {
+    for (const phrase of bannedToneHits(read(rel))) hits.push(`${rel}: ${phrase}`);
+  }
+  assert(!hits.length, hits.join('; '));
+  return `${files.length} files`;
+});
+check('copy-tone.neg-arm', () => {
+  const sample = 'Twitch no centro. Kick e YouTube no vídeo. Anúncios fora do caminho.';
+  assert(bannedToneHits(sample).length === 3, 'detector missed the banned slogan');
+  return 'detector rejected the banned slogan';
+});
+
+// ---- 7. bug ledger -------------------------------------------------------
 // States are explicit. `fixed` is allowed; `verified` needs an independent
 // verifier. The receipt always prints FIXED, NOT VERIFIED for fixed-but-
 // unverified entries instead of letting a commit message imply closure.

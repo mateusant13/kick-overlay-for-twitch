@@ -6,13 +6,9 @@ A extensão coloca o vídeo da Kick ou do YouTube sobre o player da Twitch. Ela 
 
 ## Recursos
 
-- Reproduz streams da Kick e do YouTube sobre o player da Twitch.
+- Reproduz a live atual da Twitch pela Kick ou pelo YouTube; a escolha fica salva por canal.
 - Bloqueia anúncios em lives e VODs da Twitch.
-- Restaura mudo e volume depois dos anúncios.
-- Configura um player diferente para cada canal da Twitch.
 - Usa a Kick quando o YouTube não está disponível, e volta para a Twitch quando nenhum dos dois está.
-- Mantém o chat e o resto da página da Twitch funcionando.
-- Não pede login.
 
 O bloqueio de anúncios é experimental e pode não funcionar em todas as situações.
 
@@ -20,9 +16,9 @@ O bloqueio de anúncios é experimental e pode não funcionar em todas as situa�
 
 O Twitch insere anúncios dentro da própria live. A extensão tenta bloquear o anúncio antes de ele carregar. Se o anúncio já estiver na transmissão, ela troca para uma versão sem anúncio preparada em segundo plano.
 
-Essa versão fica escondida e muda até ser necessária. Quando o intervalo termina, a extensão volta ao player normal da Twitch e restaura mudo e volume.
+Essa versão fica escondida e muda até ser necessária. Quando o intervalo termina, a extensão volta ao player normal da Twitch.
 
-Se a versão sem anúncio não estiver pronta, a extensão mantém o player normal em vez de mostrar uma tela preta. Ela não recarrega a página automaticamente.
+Com a versão pronta, a troca é imediata. Se ela ainda não estiver pronta e o player já estiver tocando, a extensão volta alguns segundos no player da Twitch para o trecho já carregado cobrir a troca. Se a versão sem anúncio falhar, o player normal continua no lugar, sem tela preta. A página não recarrega sozinha.
 
 ## Instalação
 

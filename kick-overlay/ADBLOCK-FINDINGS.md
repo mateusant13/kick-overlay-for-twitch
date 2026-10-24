@@ -1,6 +1,6 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.32**, persistent profile
+Last updated: 2026-10-24. Chrome 155 / Edge 155, extension **0.8.33**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
 CDP port 9222 (user Chrome) and 9335 (separate Edge test harness). Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
@@ -1334,3 +1334,40 @@ itself.
 This release changes no adblock code. It records why the Kick/YouTube player
 is not cloned and adds an official-site link to the popup. See
 `kick-overlay/PLAYER-1TO1-RESEARCH.md`.
+
+## 0.8.33 (2026-10-24): clean player keeps its live buffer
+
+On `jynxzi` the 4 s readiness gate never opened: `standbyReady` stayed 0 for
+60 s and four ads played. The clean player reported `rs=4` / `state=Playing`
+with only **1.21-2.38 s** of forward buffer, so lowering the gate would have
+revealed a starving picture, not fixed the bug.
+
+The cause was `jumpToLiveEdge` in `player-bridge.js`. With
+`liveSyncDurationCount: 2` and 15 s segments, hls.js correctly places the
+clean player about 30 s behind the edge. The jump test `behind > 20` read that
+as a DVR playlist starting at its oldest segment and seeked to `end - 2`,
+throwing away the buffer. A follow-up run measured 0.38-1.17 s after the jump.
+The gate is back at 4 s.
+
+The jump now only fires when `behind > 120` or `behind < 1.5`. Measured in the
+isolated Edge profile (9335), same code:
+
+- `jynxzi`: `prewarm.fast` 1.8 s, `prewarm.ok` 2.1 s. A pre-roll at 2.6 s was
+  not covered (cold case). The next ad at 18.6 s revealed the clean overlay at
+  23.7 s at 360p and kept it up to the end of the 70 s run: `playing=48` ticks,
+  `buffered=11.38 s`, native hidden.
+- `rodil`: `prewarm.fast` 2.4 s, ad at 3.1 s, `overlay-reveal` at 7.5 s. The
+  frame stayed opaque for the rest of the 60 s run: `playing=53` ticks,
+  `buffered=11.54 s`, `stops=0`.
+
+Still not fixed: an ad that starts before the standby has three healthy ticks
+(about 3 s after prewarm) shows the native ad until the clean player is ready.
+That was 4.4 s on `rodil` and the whole first pre-roll on `jynxzi`.
+
+`standbyReady` stays 0 on cold prerolls because it only counts the
+warm-standby transition. The reveal counter (`playing`) is the useful signal
+for these runs.
+
+`AD_REWIND_SEC = 0` and the native resume retries stay. The earlier native
+stalemate at `readyState 2` was not observed after this change: `jynxzi`
+resumed at `rs=4` with advancing `currentTime` after the first overlay stop.

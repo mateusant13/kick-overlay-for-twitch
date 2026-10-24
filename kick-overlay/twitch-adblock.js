@@ -140,7 +140,12 @@
   // seconds. 5s = the user's observed ~4s content grace + 1s safety. The real
   // value is measured from ko.adlog (`ad-rewind` / `content-play`); this is
   // only the starting point.
-  const AD_REWIND_SEC = 5;
+  // The cold-path rewind was meant to hide the hls.js fetch, but on ad-heavy
+  // channels it seeks the native into an unbuffered ad-only region: jynxzi
+  // dropped to readyState 1 at currentTime 5 for ~9s after a 5s rewind. Keep
+  // the native where Twitch left it; the clean overlay either covers or the
+  // native ad stays visible.
+  const AD_REWIND_SEC = 0;
   const bypassStats = {
     starts: 0,
     stops: 0,
@@ -174,6 +179,9 @@
     ready: false,
     autoplayRetry: false,
     playing: false,
+    healthyTicks: 0,
+    nudgeTries: 0,
+    lastSt: null,
     switchTries: 0,
     watchdogTimer: 0,
     stallTimer: 0,
@@ -289,6 +297,18 @@
       /* fall back to before-seconds */
     }
     if (!(target < before - 0.5)) return { skipped: 'no-window', before: +before.toFixed(2), target: +target.toFixed(2) };
+    // The old path blindly sought 5s back. On an ad-only part of the playlist
+    // that target is not buffered, and the native dropped to readyState 1 and
+    // never recovered (kimkataguiri, 2026-10-23). Only rewind into data the
+    // element already has; leave a live native alone otherwise.
+    let buffered = false;
+    try {
+      const b = v.buffered;
+      for (let i = 0; i < (b ? b.length : 0); i++) {
+        if (target >= b.start(i) && target <= b.end(i)) buffered = true;
+      }
+    } catch { /* ignore */ }
+    if (!buffered) return { skipped: 'no-buffer', before: +before.toFixed(2), target: +target.toFixed(2) };
     try {
       v.currentTime = target;
       return { before: +before.toFixed(2), target: +target.toFixed(2), delta: +(before - target).toFixed(2) };
@@ -478,13 +498,39 @@
 
   // Hiding the native video does not normally pause it, but Twitch may pause
   // when the element is occluded, and on a cold preroll the native was never
-  // playing at all. Retry the resume a few times, then click Twitch's own
-  // play button as a last resort (measured in the background Edge run: the
-  // native stayed paused after ad-end).
+  // playing at all. If it is parked at the live edge with readyState < 3, seek
+  // back two seconds first so play() has data to work with.
+  function nudgeNativeToBuffer(v) {
+    if (!v) return;
+    try {
+      let ahead = 0;
+      let target = null;
+      const b = v.buffered;
+      for (let i = 0; i < (b ? b.length : 0); i++) {
+        if (v.currentTime >= b.start(i) - 0.1 && v.currentTime <= b.end(i) + 0.1) {
+          ahead = Math.max(ahead, b.end(i) - v.currentTime);
+        }
+        if (b.end(i) < v.currentTime && b.end(i) - b.start(i) >= 1) {
+          target = Math.max(target === null ? -Infinity : target, b.end(i) - 1);
+        }
+      }
+      if (ahead >= 0.5 || target === null) return;
+      // Move back only into a range the element already has. Seeking to an
+      // arbitrary seekable point can land in an unbuffered ad-only part and
+      // leave readyState 1 (measured on kimkataguiri).
+      if (target < v.currentTime - 0.25) v.currentTime = target;
+    } catch {
+      /* ignore */
+    }
+  }
+
   function resumeNative(v, tag) {
     if (!v || !v.isConnected) return;
     try {
-      if (v.paused) {
+      // readyState 2 with paused=false is still a frozen frame. Nudge behind
+      // live and call play() even when the element claims it is not paused.
+      if (v.readyState < 3) nudgeNativeToBuffer(v);
+      if (v.paused || v.readyState < 3) {
         const p = v.play();
         if (p && p.catch) p.catch(() => {});
       }
@@ -499,21 +545,53 @@
     });
   }
 
+  // Twitch can pause the native player a couple of seconds after an overlay is
+  // removed, even when it was playing at the now/300ms retries. Retry past the
+  // old 1200ms window. Do not click Twitch's play/pause button: its label and
+  // state race with the element (measured: a click on the "Pausar" button
+  // paused a native that had just resumed), so the button is not a safe resume.
+  function resumeNativeIfAllowed(v, tag) {
+    if (!v || !v.isConnected) return;
+    if (overlay.adActive) return;
+    if (overlay.frame && !overlay.standby) return;
+    resumeNative(v, tag);
+  }
+
   function clearOverlayStall() {
     if (!overlay.stallTimer) return;
     try { clearTimeout(overlay.stallTimer); } catch { /* ignore */ }
     overlay.stallTimer = 0;
   }
 
+  function maybeNudgeOverlay(st, kind) {
+    if (!overlay.frame || !st) return false;
+    const pos = Number(st.pos);
+    if (!(pos > 2)) return false;
+    if ((overlay.nudgeTries || 0) >= 2) return false;
+    overlay.nudgeTries = (overlay.nudgeTries || 0) + 1;
+    // The clean player parks at its own live edge with 0.04s buffered and
+    // hls.js reports bufferStalledError. Seek back inside the media window and
+    // play again before falling back to the native ad.
+    overlaySend({ t: 'seek', s: Math.max(0, pos - 2) });
+    overlaySend({ t: 'play' });
+    adLog('overlay-nudge', { kind: String(kind || ''), pos: +pos.toFixed(2), tries: overlay.nudgeTries });
+    return true;
+  }
+
   function scheduleOverlayStall(kind, ms = 2500) {
-    if (!overlay.frame || overlay.standby) return;
+    if (!overlay.frame) return;
     // One timer per overlay. A healthy Playing/rs>=3 message clears it; if the
-    // clean player stays stalled we give up and restore the native surface
-    // instead of leaving a frozen frame over a hidden native player.
+    // clean player stays stalled we nudge it back once or twice, then restore
+    // the native surface instead of leaving a frozen frame.
     if (overlay.stallTimer) return;
     overlay.stallTimer = setTimeout(() => {
       overlay.stallTimer = 0;
-      if (!overlay.frame || overlay.standby) return;
+      if (!overlay.frame) return;
+      if (maybeNudgeOverlay(overlay.lastSt, kind)) {
+        scheduleOverlayStall(kind, 3000);
+        return;
+      }
+      const wasStandby = overlay.standby;
       adLog('overlay-stall-stop', {
         kind: String(kind || ''),
         revealed: overlay.revealed,
@@ -521,6 +599,7 @@
         switchPrev: !!overlay.switchPrev,
       });
       stopAdOverlay('clean-stall');
+      if (wasStandby) requestStandby(600, true);
     }, ms);
   }
 
@@ -557,6 +636,9 @@
         overlay.unmuteHandler = null;
       }
       overlay.playing = false;
+      overlay.healthyTicks = 0;
+      overlay.nudgeTries = 0;
+      overlay.lastSt = null;
       overlay.switchTries = 0;
       overlay.rewound = false;
       overlay.revealed = false;
@@ -595,30 +677,36 @@
         try {
           if (Number.isFinite(overlay.wasVolume)) v.volume = overlay.wasVolume;
         } catch { /* ignore */ }
-        resumeNative(v, 'now');
+        resumeNativeIfAllowed(v, 'now');
         setTimeout(() => {
           // A new *hidden standby* must not block the native resume retries;
           // only a visible/held ad overlay should. Measured: starting the new
           // standby at ~1s prevented the 1200ms retry and left Twitch paused.
-          if (overlay.frame && !overlay.standby) return;
-          resumeNative(v, '300ms');
+          resumeNativeIfAllowed(v, '300ms');
         }, 300);
-        setTimeout(() => {
-          if (overlay.frame && !overlay.standby) return;
-          resumeNative(v, '1200ms');
-          if (v.paused) {
-            try {
-              const btn = document.querySelector('[data-a-target="player-play-pause-button"]');
-              if (btn) btn.click();
-              adLog('native-resume-click', {
-                paused: v.paused,
-                label: btn ? btn.getAttribute('aria-label') : null,
-              });
-            } catch {
-              /* ignore */
+        setTimeout(() => resumeNativeIfAllowed(v, '1200ms'), 1200);
+        setTimeout(() => resumeNativeIfAllowed(v, '2500ms'), 2500);
+        setTimeout(() => resumeNativeIfAllowed(v, '4000ms'), 4000);
+        // A stalled clean overlay can leave Twitch's native player parked at
+        // the live edge, paused, with no forward buffer. Four one-shot retries
+        // are not enough: measured 2026-10-23 `jynxzi` stayed paused for ~7s
+        // after clean-stall. Keep nudging it back behind live for 10s, but only
+        // after a failure path, not after a normal ad-end.
+        if (/clean-stall|ad-only|standby-timeout/.test(String(reason || ''))) {
+          let n = 0;
+          const timer = setInterval(() => {
+            if (++n > 10) {
+              clearInterval(timer);
+              return;
             }
-          }
-        }, 1200);
+            if (overlay.adActive) return;
+            if (overlay.frame && !overlay.standby) return;
+            const nv = mainVideo();
+            if (!nv || !nv.isConnected) return;
+            if (!nv.paused && nv.readyState >= 3) return;
+            resumeNative(nv, 'watch');
+          }, 1000);
+        }
       }
     }
     if (wasStandby) {
@@ -635,6 +723,9 @@
     overlay.ready = false;
     overlay.autoplayRetry = false;
     overlay.playing = false;
+    overlay.healthyTicks = 0;
+    overlay.nudgeTries = 0;
+    overlay.lastSt = null;
     overlay.switchTries = 0;
     overlay.onMessage = null;
     overlay.rewound = false;
@@ -788,6 +879,9 @@
         overlay.onMessage = null;
         overlay.ready = false;
         overlay.playing = false;
+        overlay.healthyTicks = 0;
+        overlay.nudgeTries = 0;
+        overlay.lastSt = null;
         overlay.standby = false;
         overlay.adActive = true;
       } else {
@@ -851,6 +945,9 @@
     overlay.autoplayRetry = false;
     overlay.adEndTries = 0;
     overlay.playing = false;
+    overlay.healthyTicks = 0;
+    overlay.nudgeTries = 0;
+    overlay.lastSt = null;
     overlay.revealed = false;
     overlay.nativeHidden = false;
     // A standby is a clean player that is already running behind the native
@@ -987,22 +1084,40 @@
         return;
       }
       if (m.t === 'st' && m.st) {
+        overlay.lastSt = m.st;
         if (m.st.state === 'Playing') {
-          // HAVE_FUTURE_DATA is the minimum that can be revealed without
-          // freezing. A stalled hls.js still reports state=Playing with rs=2
-          // and buffered=0 (measured on the Necros long pod).
-          const healthy = typeof m.st.rs !== 'number' || m.st.rs >= 3;
+          // HAVE_FUTURE_DATA plus four seconds of forward buffer is the minimum
+          // that survived the ad-heavy 2026-10-23 channels without a freeze.
+          // A stalled hls.js still reports state=Playing with rs=2 and buffered=0
+          // (measured on the Necros long pod); a 2s buffer was not enough on
+          // kimkataguiri (it drained one second after reveal). Keep the native
+          // surface up until the clean player can survive several refreshes.
+          const healthy = (typeof m.st.rs !== 'number' || m.st.rs >= 3)
+            && (typeof m.st.buffered !== 'number' || m.st.buffered >= 4);
           if (!healthy) {
+            // A single healthy heartbeat is not enough. The 2026-10-23 run
+            // revealed at a healthy tick and lost the buffer one second later;
+            // mark the frame not-playing so a standby cannot be adopted from
+            // stale state.
+            overlay.healthyTicks = 0;
+            overlay.playing = false;
             if (!overlay.lastUnhealthyLogAt || Date.now() - overlay.lastUnhealthyLogAt > 2000) {
               overlay.lastUnhealthyLogAt = Date.now();
               adLog('playing-not-healthy', { rs: m.st.rs, buffered: m.st.buffered, pos: m.st.pos });
             }
-            scheduleOverlayStall('rs' + m.st.rs);
+            if (!overlay.standby || m.st.pos > 2) scheduleOverlayStall('rs' + m.st.rs);
             return;
           }
+          overlay.healthyTicks = (overlay.healthyTicks || 0) + 1;
           clearOverlayStall();
           const wasPlaying = overlay.playing;
-          overlay.playing = true;
+          if (!overlay.playing) {
+            // Require three consecutive healthy heartbeats before covering the
+            // native surface. The clean source can report rs=4 once and then
+            // drain to 0.04s while a hidden standby is still starting.
+            if (overlay.healthyTicks < 3) return;
+            overlay.playing = true;
+          }
           try { clearTimeout(overlay.watchdogTimer); } catch { /* ignore */ }
           overlay.watchdogTimer = 0;
           if (overlay.standby && !overlay.adActive) {

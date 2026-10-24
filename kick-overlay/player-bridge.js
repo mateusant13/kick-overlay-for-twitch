@@ -192,10 +192,19 @@ if (HLS_MODE) {
   // The YouTube layer keeps its tuned 30s/3-segment live buffer.
   const hlsConfig = TWITCH_HLS
     ? {
-        maxBufferLength: 15,
-        liveSyncDurationCount: 1,
-        liveBackBufferLength: 15,
+        // A 1-segment live sync left the clean player 0.04s from the edge in
+        // the 2026-10-23 10-channel run; hls.js then stalled on the first
+        // refresh. Keep one target segment of slack so the hidden player has
+        // something to play while the next segment is fetched.
+        maxBufferLength: 30,
+        liveSyncDurationCount: 2,
+        liveBackBufferLength: 30,
         startPosition: -1,
+        // The clean autoplay/android master can be LL-HLS. hls.js's low-latency
+        // mode then follows parts with <1s of forward buffer and stalls on a
+        // normal segment refresh (measured: 0.04-0.888s buffered on jynxzi).
+        // Full-segment live sync gives the hidden/visible clean player runway.
+        lowLatencyMode: false,
         // Start on the lowest rendition. A cold standby on the native master
         // otherwise races a 1080p segment download before the preroll lands;
         // ABR can step up after the first clean frame.
@@ -212,9 +221,12 @@ if (HLS_MODE) {
   let currentUrl = null;
   let reloaded = false;
   // hls.js can start a DVR playlist at its oldest segment (measured: a 30s
-  // window began at currentTime 0 / lat 30). Jump once per load to the live
-  // edge as soon as the seekable range exists. A deliberate user seek later
-  // is not overridden because the flag is only reset by a new load.
+  // window began at currentTime 0 / lat 30). Jump once per load only in that
+  // case, or when the player somehow starts inside 1.5s of the edge. Do not
+  // pull a player that hls.js already placed behind live: the old unconditional
+  // `end - 0.5` jump left the 2026-10-23 clean player at 0.04s of buffer and
+  // it stalled on the first refresh. A deliberate user seek later is not
+  // overridden because the flag is only reset by a new load.
   let liveJumped = false;
   const jumpToLiveEdge = () => {
     if (liveJumped) return;
@@ -223,7 +235,13 @@ if (HLS_MODE) {
       const end = V.seekable.end(V.seekable.length - 1);
       if (!isFinite(end) || end <= 0) return;
       const pos = V.currentTime || 0;
-      if (end - pos > 2) V.currentTime = Math.max(0, end - 0.5);
+      const behind = end - pos;
+      // liveSyncDurationCount 2 with 15s segments puts a healthy clean player
+      // about 30s behind the edge. The old `behind > 20` test mistook that for
+      // a DVR start and jumped to end-2, leaving only 0.4-1.2s of forward
+      // buffer on jynxzi (2026-10-24), so the 4s readiness gate never opened.
+      // Only correct a real DVR position or a player sitting on the edge.
+      if (behind > 120 || behind < 1.5) V.currentTime = Math.max(0, end - 2);
       liveJumped = true;
       V.play().catch(() => { /* autoplay policy */ });
     } catch { /* not ready */ }

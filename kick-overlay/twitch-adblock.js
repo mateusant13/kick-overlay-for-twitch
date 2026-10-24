@@ -591,6 +591,15 @@
         scheduleOverlayStall(kind, 3000);
         return;
       }
+      // A cold ad can start while the clean player is still at the beginning
+      // of its window (pos <= 2), so there is nothing to rewind into yet. Keep
+      // the hidden frame alive while the native ad is on screen instead of
+      // stopping it; the 12s hideTimer and the ad-end path still bound it.
+      const age = Date.now() - (overlay.startedAt || 0);
+      if (overlay.adActive && age < 12000) {
+        scheduleOverlayStall(kind, 1500);
+        return;
+      }
       const wasStandby = overlay.standby;
       adLog('overlay-stall-stop', {
         kind: String(kind || ''),
@@ -963,6 +972,11 @@
     // reveal a black/frozen frame. Restore the native player instead. (A
     // standby must never reveal itself: it is invisible content, not an ad, so
     // it has no fallback timer.)
+    // A cold pre-roll can start before the clean source has buffered anything
+    // (jynxzi 2026-10-24: ad at 2.6s, prewarm.ok at 2.1s). The old 5s limit
+    // stopped the overlay while it was still filling the 11s buffer, so the
+    // whole first ad played. The frame stays hidden at 1% until healthy, so a
+    // longer window costs no visible artifact; ad-end still stops it earlier.
     if (!standby) {
       overlay.hideTimer = setTimeout(() => {
         if (!overlay.frame || overlay.revealed) return;
@@ -972,7 +986,7 @@
           return;
         }
         revealOverlay('fallback-timeout');
-      }, 5000);
+      }, 12000);
     }
 
     // Small, non-interactive indicator so the reduced-quality player is not

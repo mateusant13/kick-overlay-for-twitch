@@ -1,6 +1,6 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-24. Chrome 155 / Edge 155, extension **0.8.33**, persistent profile
+Last updated: 2026-10-24. Chrome 155 / Edge 155, extension **0.8.34**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
 CDP port 9222 (user Chrome) and 9335 (separate Edge test harness). Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
@@ -1371,3 +1371,32 @@ for these runs.
 `AD_REWIND_SEC = 0` and the native resume retries stay. The earlier native
 stalemate at `readyState 2` was not observed after this change: `jynxzi`
 resumed at `rs=4` with advancing `currentTime` after the first overlay stop.
+
+## 0.8.34 (2026-10-24): longer cold-preroll window
+
+0.8.33 fixed the buffer, but a pre-roll that lands before the standby is
+healthy still showed the native ad. Two timers stopped the hidden clean
+player early:
+
+- the 5 s `hideTimer` in `twitch-adblock.js`;
+- the stall fallback, which gave up as soon as `maybeNudgeOverlay` had
+  nothing to rewind into (`pos <= 2`).
+
+Both now allow 12 s while `overlay.adActive`. The frame stays at 1% opacity
+until it is healthy, so the longer window adds no visible artifact, and the
+ad-end path still stops it earlier.
+
+Measured, same build, isolated Edge profile (9335):
+
+- `jynxzi` warm: `prewarm.fast` 2.86 s, `prewarm.ok` 3.4 s, `ad-hold` at
+  10.2 s. The standby was already ready, so `overlay-reveal` fired at the same
+  instant with `reason:"standby"`. `starts=1`, `stops=0`, `playing=61`,
+  `buffered=11.86 s`, native hidden.
+- `rodil` cold: ad at 2.75 s, `firstframe-not-playing` at 4.6 s,
+  `overlay-reveal` at 7.35 s. `buffered=11.88 s`, `stops=0`, frame opaque to
+  the end of the 60 s run.
+- `rodil` cold, earlier run: ad at 3.07 s, reveal at 7.46 s.
+
+The cold path now covers the ad 4.4-4.6 s after it starts instead of missing
+the whole pod. The remaining delay is the clean source mint plus buffer time;
+it cannot be removed without revealing a frame that is still filling.

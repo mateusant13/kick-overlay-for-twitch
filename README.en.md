@@ -2,30 +2,27 @@
 
 **Language:** [Português](README.md) | English
 
-Use the Kick or YouTube player directly on Twitch, with built-in ad blocking.
+The extension places Kick or YouTube video over the Twitch player. It also blocks Twitch ads.
 
 ## Features
 
 - Plays Kick and YouTube streams over the Twitch player.
 - Blocks ads on Twitch live streams and VODs.
 - Restores mute and volume settings after ads.
-- Lets you configure a different player for each Twitch channel.
+- Configures a different player for each Twitch channel.
 - Falls back to Kick when YouTube is unavailable, and to Twitch when neither is available.
 - Keeps Twitch chat and the rest of the page working.
-- No login, analytics, or telemetry.
+- No login.
 
 Ad blocking is experimental and may not work in every situation.
 
 ## How ad blocking works
 
-Twitch sometimes puts the ad inside the live stream itself. The extension tries to handle that in two ways:
+Twitch inserts ads into the live stream. The extension tries to block the ad before it loads. If the ad is already in the stream, it switches to an ad-free version prepared in the background.
 
-1. Before the ad loads, it tries to keep the ad out of the stream.
-2. If the ad is already there, it switches to a clean copy of the live stream that was prepared in the background. That version stays hidden and muted until it is needed.
+That version stays hidden and muted until it is needed. When the break ends, the extension returns to the normal Twitch player and restores mute and volume.
 
-When the break ends, the extension returns to the normal Twitch player and restores mute and volume.
-
-If the clean copy is not ready, the extension leaves the normal player in place instead of showing a black screen. It does not reload the page automatically.
+If the ad-free version is not ready, the extension keeps the normal player in place instead of showing a black screen. It does not reload the page automatically.
 
 ## Installation
 

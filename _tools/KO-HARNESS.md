@@ -71,13 +71,14 @@ does not touch the live profile. It checks:
 - the cold-open markers (`prewarm.fast`, early retry times, grace timer,
   `startLevel: 0`);
 - the 1:1 research and official-site shortcut are documented, in Portuguese and English;
-- the banned slogan from `AGENTS.md` does not return to either README;
+- the READMEs do not contain the AI-slop patterns tracked by the gate;
 - the bug ledger schema and the independent-verifier rule.
 
-It also executes two **negative arms**: the auto-refresh detector must reject
-a synthetic `location.reload()`, and the cold-contract detector must reject a
-copy with `prewarm.fast` removed. If either detector accepts its mutation, the
-gate fails. That is the point: a detector that has never failed is not evidence.
+It also executes three **negative arms**: the auto-refresh detector must reject
+a synthetic `location.reload()`, the cold-contract detector must reject a copy
+with `prewarm.fast` removed, and the copy-slop detector must reject a known
+slop sample. If any detector accepts its mutation, the gate fails. That is the
+point: a detector that has never failed is not evidence.
 
 The receipt is written to `_evidence/ko-verify-latest.json` and
 `_evidence/ko-verify-latest.md` with the timestamp, git head, version, each

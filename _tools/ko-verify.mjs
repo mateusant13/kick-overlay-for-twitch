@@ -147,33 +147,45 @@ check('docs', () => {
   return 'research + official-site shortcut documented';
 });
 
-// ---- 6. copy tone --------------------------------------------------------
-// AGENTS.md forbids this slogan. Keep it out of both READMEs; the negative arm
-// proves the detector actually catches the phrase.
-const BANNED_TONE = [
-  'Twitch no centro',
-  'Kick e YouTube no vídeo',
-  'Anúncios fora do caminho',
-  'Twitch at the center',
-  'Kick and YouTube in the video',
-  'Ads out of the way',
+// ---- 6. copy slop --------------------------------------------------------
+// AGENTS.md forbids AI-slop patterns. This is a smoke test, not a detector for
+// every kind of bad prose; the negative arm proves the patterns fire.
+const SLOP_PATTERNS = [
+  /\bnot just\b/i,
+  /\bisn't just\b/i,
+  /\bnot only\b/i,
+  /\bnão é só\b/i,
+  /\bnão é apenas\b/i,
+  /\bthe goal is not\b/i,
+  /\bo objetivo não é\b/i,
+  /\bunlock\b/i,
+  /\btransform\b/i,
+  /\belevate\b/i,
+  /\bempower\b/i,
+  /\bstreamline\b/i,
+  /\bseamless\b/i,
+  /\bdelv(?:e|ing)\b/i,
+  /\btapestry\b/i,
+  /\bpivotal\b/i,
+  /\btestament\b/i,
+  /\u2014/,
 ];
-function bannedToneHits(text) {
-  return BANNED_TONE.filter((phrase) => text.includes(phrase));
+function slopHits(text) {
+  return SLOP_PATTERNS.filter((re) => re.test(text)).map((re) => String(re));
 }
-check('copy-tone', () => {
+check('copy-slop', () => {
   const files = ['README.md', 'README.en.md'].filter((rel) => existsSync(path.join(ROOT, rel)));
   const hits = [];
   for (const rel of files) {
-    for (const phrase of bannedToneHits(read(rel))) hits.push(`${rel}: ${phrase}`);
+    for (const pattern of slopHits(read(rel))) hits.push(`${rel}: ${pattern}`);
   }
   assert(!hits.length, hits.join('; '));
   return `${files.length} files`;
 });
-check('copy-tone.neg-arm', () => {
-  const sample = 'Twitch no centro. Kick e YouTube no vídeo. Anúncios fora do caminho.';
-  assert(bannedToneHits(sample).length === 3, 'detector missed the banned slogan');
-  return 'detector rejected the banned slogan';
+check('copy-slop.neg-arm', () => {
+  const sample = 'Not just a player. Unlock the future.';
+  assert(slopHits(sample).length >= 2, 'detector missed the slop sample');
+  return 'detector rejected the slop sample';
 });
 
 // ---- 7. bug ledger -------------------------------------------------------

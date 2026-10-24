@@ -56,6 +56,49 @@ Exit code is 0 only when every check is PASS/SKIP/WARN. A JSON report and a
 Current suite: **21 checks** (21/21 PASS on 2026-10-20 at `jb_sniper` + a live
 YouTube HLS video).
 
+## Fast evidence gate (no browser)
+
+```powershell
+node _tools/ko-verify.mjs
+```
+
+This is the cheap gate for every code change. It does not start Chrome and
+does not touch the live profile. It checks:
+
+- `node --check` on the product JS files;
+- manifest v3, semver, and packaged files;
+- no `location.reload`, `location.href = location.href`, or meta refresh;
+- the cold-open markers (`prewarm.fast`, early retry times, grace timer,
+  `startLevel: 0`);
+- the 1:1 research and official-site shortcut are documented;
+- the bug ledger schema and the independent-verifier rule.
+
+It also executes two **negative arms**: the auto-refresh detector must reject
+a synthetic `location.reload()`, and the cold-contract detector must reject a
+copy with `prewarm.fast` removed. If either detector accepts its mutation, the
+gate fails. That is the point: a detector that has never failed is not evidence.
+
+The receipt is written to `_evidence/ko-verify-latest.json` and
+`_evidence/ko-verify-latest.md` with the timestamp, git head, version, each
+check, the source hashes, and a **NOT MEASURED** list. If a ledger bug is
+`fixed` but not independently `verified`, the gate prints
+`FIXED, NOT VERIFIED` in large letters. It does not silently turn a commit
+into a verification.
+
+This gate does **not** replace `ko-harness.mjs check`; it proves static
+properties and detector behavior only. The live/harness suite remains the
+runtime gate.
+
+## What is NOT measured
+
+- A real cold preroll in the owner Chrome on the current build.
+- Long-run stability on a real live stream.
+- Edge synthetic timings as a substitute for the owner measurement.
+- The heavy `ko-harness.mjs check` suite (not run by `ko-verify.mjs`).
+- JS-side profiling; there is no equivalent of a `py-spy` run yet.
+- A `verified` bug state; that needs an independent verifier and a real app
+  run, neither of which a lane can supply alone.
+
 ## Updating the user's live install
 
 `ko-reload-persistent.mjs` reloads the unpacked KO in the debug profile

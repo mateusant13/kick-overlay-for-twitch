@@ -180,6 +180,8 @@ node _tools/ko-harness.mjs check --fresh --yt='https://www.youtube.com/watch?v=3
 
 O harness sobe um perfil separado (porta 9335) para não mexer no seu Chrome. O relatório vai para `G:\Temp\opencode\ko-harness-report.json`.
 
+Para um portão rápido, sem abrir navegador: `node _tools/ko-verify.mjs`. Ele checa sintaxe, manifesto, contrato do cold open e o ledger de bugs, executa os braços negativos e escreve um recibo em `_evidence/`.
+
 ### As regras do adblock
 
 - Nunca revelar um frame sem `Playing` saudável (`readyState >= 3`); se travar, voltar ao nativo.

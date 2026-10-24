@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "bugs": [
+    {
+      "id": "KO-20261023-01",
+      "title": "Cold preroll native ad stays visible too long",
+      "state": "fixed",
+      "author": "lane",
+      "reported": "2026-10-23",
+      "fixed_in": "0.8.31 / 0.8.32",
+      "commit": "98fd0f1",
+      "hypothesis": "Early prewarm plus a fast standby handoff shrinks the window in which the native ad is visible on a cold open.",
+      "falsifier": "A real cold open still reveals the clean frame more than 2 s after ad-start.",
+      "evidence": [
+        "Edge synthetic ad-hold + ad-start: reveal in 136-547 ms (2026-10-23)",
+        "Edge real rodil: preroll at 3.3 s and 4.3 s beat the 2.6 s and 3.3 s fast prewarm; rebuilt and revealed at 6.8 s and 7.8 s",
+        "Edge offline duda: no standby and no retry loop"
+      ],
+      "verified": false,
+      "verified_by": null,
+      "owner_validation": "pending",
+      "next": "Owner F5 a real cold open on 0.8.32. If the reveal is still over 2 s, try a cached clean URL or an earlier worker start."
+    }
+  ]
+}

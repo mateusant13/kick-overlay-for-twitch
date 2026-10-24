@@ -147,6 +147,7 @@ Ou seja: o “buffer” já acontece em paralelo, num player separado. Não prec
 | Tela preta ou player travado | A extensão tenta voltar para o player nativo quando o frame limpo não chega a `Playing`. Se persistir, dê **F5** e desligue o overlay para isolar o problema. |
 | Kick ou YouTube não aparece | Confira se o canal está ao vivo e se o nome/URL está certo. Se o streamer faz multi stream, confirme no popup se o canal da Kick/YouTube é o mesmo que ele está usando. O mapeamento é por canal e fica salvo. |
 | Escolhi YouTube, mas apareceu o player da Kick | O YouTube não foi encontrado ou não estava ao vivo, então a extensão usou o fallback para a Kick. Confira a URL, o `@handle` ou o ID. A barra fica verde no Kick e vermelha no YouTube. |
+| Quero o player 1:1 da Kick ou do YouTube | Não existe um clone 1:1 confiável e mantido. O player oficial só roda no site do provedor: o da Kick não deixa a extensão controlar mute e pause, e o do YouTube pode cair em bloqueio sem cookie e mostrar anúncios. O projeto usa o mesmo motor da Kick e HLS do YouTube com a barra do overlay. Para a experiência 1:1, use **Abrir no site oficial** no popup. |
 | Apareceu um player diferente sem anúncio | O frame limpo do anúncio só entra quando a extensão detecta um anúncio. Se não havia anúncio, veja a cor da barra: verde é o fallback da Kick, vermelha é o YouTube. |
 | Quero conferir a versão | Abra `chrome://extensions` e veja o número embaixo do nome. |
 
@@ -193,6 +194,7 @@ O harness sobe um perfil separado (porta 9335) para não mexer no seu Chrome. O 
 
 - **Anúncio de live:** durante o intervalo, o frame limpo é 360p. Fora do anúncio, o player nativo volta à qualidade escolhida.
 - **Anúncio antes da live:** se o anúncio chegar junto com o carregamento, ele ainda pode aparecer mudo por instantes. A extensão começa o standby mais cedo e cobre assim que ele fica saudável; a alternativa seria uma tela preta, que foi descartada.
+- **Player 1:1:** o overlay chega perto, mas não é um clone exato da Kick ou do YouTube. O player oficial não pode ser controlado pela extensão (e o do YouTube pode bloquear sem cookie), então o caminho para 1:1 real é o atalho **Abrir no site oficial** no popup. A pesquisa está em `kick-overlay/PLAYER-1TO1-RESEARCH.md`.
 - **Twitch muda com frequência:** se o Twitch mudar o formato do SSAI, o adblock pode parar de funcionar até uma atualização. O log em `ADBLOCK-FINDINGS.md` existe para facilitar o diagnóstico.
 - **VOD:** o bloqueio é de CSAI; se o Twitch mudar a entrega, pode ser necessário ajustar os hosts bloqueados.
 - **A extensão não é afiliada** à Twitch, Kick ou YouTube.

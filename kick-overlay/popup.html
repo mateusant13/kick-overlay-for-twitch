@@ -79,6 +79,14 @@
     .status { margin-top: 10px; font-size: 12px; color: #adadb8; min-height: 16px; }
     .status b.ok { color: #53fc18; }
     .status b.off { color: #f87171; }
+    a.official {
+      display: block;
+      margin-top: 8px;
+      color: #53fc18;
+      font-size: 12px;
+      text-decoration: none;
+    }
+    a.official:hover { text-decoration: underline; }
     .hint { margin-top: 8px; font-size: 11px; color: #73737c; }
   </style>
 </head>
@@ -126,6 +134,7 @@
       <input type="text" id="yt" placeholder="YouTube live/vídeo URL, @handle ou UC…" />
     </div>
     <div class="status" id="status"></div>
+    <a id="official" class="official" target="_blank" rel="noopener" style="display:none"></a>
     <button id="del" class="danger" style="display:none">Deletar player Twitch</button>
     <div class="hint">Player alternado SÓ pelo popup. O player da Twitch continua rodando (mudo) embaixo do overlay — ads passam em silêncio e voltar pra Twitch cai ao vivo. "Deletar player Twitch" remove o player nativo pra conferir que o vídeo visível é o overlay; recarregue a página pra restaurar.</div>
   </div>

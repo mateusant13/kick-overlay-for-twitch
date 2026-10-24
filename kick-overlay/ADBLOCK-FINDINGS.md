@@ -1,6 +1,6 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.31**, persistent profile
+Last updated: 2026-10-23. Chrome 155 / Edge 155, extension **0.8.32**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
 CDP port 9222 (user Chrome) and 9335 (separate Edge test harness). Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
@@ -1322,9 +1322,15 @@ Measured in the separate Edge profile (9335), same code:
 - `duda` (offline): no fast URL, no standby, no retry loop after the master
   check and the 4s forced-retry cooldown.
 
-Not yet measured: a real cold preroll in the owner's Chrome on 0.8.31. The
-earlier owner baseline had `prewarm.ok` at 4.47s, `ad-start` at 5.19s and
+Not yet measured: a real cold preroll in the owner's Chrome on 0.8.31/0.8.32.
+The earlier owner baseline had `prewarm.ok` at 4.47s, `ad-start` at 5.19s and
 reveal at 7.34s. The fast path is intended to move the standby well before
 that 5.19s mark; the owner needs to F5 a real live to confirm the practical
 window. A manual F5 is still not part of the design: the page never reloads
 itself.
+
+## 0.8.32 (2026-10-23): player 1:1 decision
+
+This release changes no adblock code. It records why the Kick/YouTube player
+is not cloned and adds an official-site link to the popup. See
+`kick-overlay/PLAYER-1TO1-RESEARCH.md`.

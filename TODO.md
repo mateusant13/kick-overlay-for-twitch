@@ -3,7 +3,9 @@
 **Status: COMPLETE.** Version **0.8.29** was validated by the owner in real use
 on 2026-10-23. Version **0.8.30** adds two follow-up fixes for YouTube mode and
 the YouTube-to-Kick fallback. Version **0.8.31** speeds up the cold preroll
-standby. There are no open code items; one owner validation remains.
+standby. Version **0.8.32** records the player 1:1 research and adds an
+official-site shortcut to the popup. There are no open code items; one owner
+validation remains.
 
 The detailed evidence for every fix is in
 `kick-overlay/ADBLOCK-FINDINGS.md`. Older revisions of this TODO, including the
@@ -73,6 +75,24 @@ investigations that led to 0.8.8-0.8.29, remain in the git history.
   shorter, but an ad that lands before the standby is healthy can still show
   muted native video. That tradeoff is deliberate: a frozen/black cover was
   rejected.
+
+## Player 1:1 decision (2026-10-23)
+
+- [x] Searched for an existing production clone of the Kick or YouTube player.
+  None was found; multi-stream projects use the official embeds, and the
+  Video.js YouTube skin is explicitly pre-release.
+- [x] Verified the official Kick embed (`https://player.kick.com/{channel}`)
+  and its documented `autoplay`, `muted` and `allowfullscreen` parameters.
+  Inspected its bundle: it has no parent-window `message` API for play/pause/
+  mute, so a wrapper cannot control it.
+- [x] Verified the YouTube IFrame API exists, but the project already measured
+  the live embed failing on bot-gated/cookieless sessions; it can also show
+  YouTube ads.
+- [x] **Decision:** keep the current overlay (Amazon IVS for Kick, hls.js for
+  YouTube). Do not build a full clone. The popup now has **Abrir no site
+  oficial** for a true 1:1 experience.
+- [x] Research and sources are recorded in
+  `kick-overlay/PLAYER-1TO1-RESEARCH.md`.
 
 ## Delivered
 

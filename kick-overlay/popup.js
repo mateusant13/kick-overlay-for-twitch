@@ -151,6 +151,51 @@ async function kickStatus(slug) {
   $('kick').disabled = !slug;
   $('yt').disabled = !slug;
 
+  // 0.8.32: a true 1:1 player is the platform's own page. There is no stable
+  // clone and the Kick embed exposes no control API, so the popup offers the
+  // official page as an explicit escape hatch instead of faking its UI.
+  const official = $('official');
+  function officialTarget() {
+    if (!slug) return null;
+    const p = $('player').value;
+    if (p === 'youtube') {
+      let raw = ($('yt').value || '').trim();
+      if (!raw && m && typeof m === 'object' && m.ytId) raw = m.ytId;
+      if (!raw) return null;
+      let href = raw;
+      if (/^[0-9A-Za-z_-]{11}$/.test(raw)) href = `https://www.youtube.com/watch?v=${raw}`;
+      else if (/^UC[0-9A-Za-z_-]{22}$/.test(raw)) href = `https://www.youtube.com/channel/${raw}/live`;
+      else if (/^@[A-Za-z0-9._-]+$/.test(raw)) href = `https://www.youtube.com/${raw}/live`;
+      else if (/^(?:www\.)?youtube\.com\//i.test(raw) || /^youtu\.be\//i.test(raw)) {
+        href = `https://${raw.replace(/^https?:\/\//i, '')}`;
+      } else if (!/^https?:\/\//i.test(raw)) href = `https://www.youtube.com/@${raw}/live`;
+      return { href, label: 'Abrir no site oficial' };
+    }
+    if (p === 'twitch') {
+      return { href: `https://www.twitch.tv/${encodeURIComponent(slug)}`, label: 'Abrir no site oficial' };
+    }
+    const kick = ($('kick').value || '').trim() || slug;
+    return { href: `https://kick.com/${encodeURIComponent(kick)}`, label: 'Abrir no site oficial' };
+  }
+  function renderOfficial() {
+    if (!slug) {
+      official.style.display = 'none';
+      return;
+    }
+    const t = officialTarget();
+    if (!t) {
+      official.style.display = 'none';
+      return;
+    }
+    official.href = t.href;
+    official.textContent = t.label;
+    official.style.display = 'block';
+  }
+  renderOfficial();
+  $('player').addEventListener('change', renderOfficial);
+  $('kick').addEventListener('input', renderOfficial);
+  $('yt').addEventListener('input', renderOfficial);
+
   if (slug && kickSlug) {
     const s = await kickStatus(kickSlug);
     if (s.live === true) {

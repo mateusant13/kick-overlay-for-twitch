@@ -182,6 +182,10 @@
     healthyTicks: 0,
     nudgeTries: 0,
     lastSt: null,
+    lastStAt: 0,
+    catchupAt: 0,
+    unmuteTried: false,
+    unmuteCheck: 0,
     switchTries: 0,
     watchdogTimer: 0,
     stallTimer: 0,
@@ -648,6 +652,11 @@
       overlay.healthyTicks = 0;
       overlay.nudgeTries = 0;
       overlay.lastSt = null;
+      overlay.catchupAt = 0;
+      overlay.unmuteTried = false;
+      try { clearTimeout(overlay.unmuteCheck); } catch { /* ignore */ }
+      overlay.unmuteCheck = 0;
+      overlay.lastStAt = 0;
       overlay.switchTries = 0;
       overlay.rewound = false;
       overlay.revealed = false;
@@ -735,6 +744,11 @@
     overlay.healthyTicks = 0;
     overlay.nudgeTries = 0;
     overlay.lastSt = null;
+    overlay.catchupAt = 0;
+    overlay.unmuteTried = false;
+    try { clearTimeout(overlay.unmuteCheck); } catch { /* ignore */ }
+    overlay.unmuteCheck = 0;
+    overlay.lastStAt = 0;
     overlay.switchTries = 0;
     overlay.onMessage = null;
     overlay.rewound = false;
@@ -774,6 +788,27 @@
     }
     overlay.standby = false;
     overlay.adActive = true;
+    // A standby that sat hidden while the tab was throttled can be far behind
+    // the live edge (measured on srdogg 2026-10-25: lat 115.8s, dur 224s).
+    // Revealing it would show a delayed stream and then jump forward at
+    // ad-end. Seek inside the live window first and keep the native surface
+    // (already muted by ad-hold) until the clean player is healthy again.
+    if (wasStandby && overlay.lastSt) {
+      const lat0 = Number(overlay.lastSt.lat);
+      const pos0 = Number(overlay.lastSt.pos);
+      if (Number.isFinite(lat0) && lat0 > 20) {
+        overlay.playing = false;
+        overlay.healthyTicks = 0;
+        overlaySend({ t: 'seek', s: Math.max(0, pos0 + lat0 - 3) });
+        overlaySend({ t: 'play' });
+        adLog('overlay-catchup', { lat: +lat0.toFixed(1), pos: +pos0.toFixed(1) });
+        try { clearTimeout(overlay.hideTimer); } catch { /* ignore */ }
+        overlay.hideTimer = setTimeout(() => {
+          if (overlay.frame && !overlay.revealed && !overlay.playing) stopAdOverlay('catchup-timeout');
+        }, 12000);
+        return;
+      }
+    }
     if (wasStandby || reason === 'standby') bypassStats.standbyHits++;
     if (!overlay.revealed) {
       overlay.revealed = true;
@@ -799,6 +834,28 @@
     if (!overlay.nativeHidden) {
       hideNativeVideos();
       overlay.nativeHidden = true;
+    }
+    // The clean player is started muted so Chrome can autoplay it. Once the
+    // frame actually covers the native surface, try to restore sound. If the
+    // browser refuses, keep the muted player and leave the click-to-sound
+    // badge; never trade a visible ad for a frozen clean frame.
+    if (!overlay.unmuteTried) {
+      overlay.unmuteTried = true;
+      overlaySend({ t: 'mute', m: false });
+      overlaySend({ t: 'play' });
+      try { clearTimeout(overlay.unmuteCheck); } catch { /* ignore */ }
+      overlay.unmuteCheck = setTimeout(() => {
+        const st = overlay.lastSt;
+        if (!overlay.frame || !st) return;
+        if (st.muted || st.paused) {
+          overlaySend({ t: 'mute', m: true });
+          overlaySend({ t: 'play' });
+          adLog('unmute-blocked', { muted: !!st.muted, paused: !!st.paused });
+        } else {
+          if (overlay.badge) overlay.badge.style.display = 'none';
+          adLog('unmute-ok');
+        }
+      }, 1500);
     }
     if (overlay.hideTimer) {
       try { clearTimeout(overlay.hideTimer); } catch { /* ignore */ }
@@ -891,6 +948,11 @@
         overlay.healthyTicks = 0;
         overlay.nudgeTries = 0;
         overlay.lastSt = null;
+        overlay.catchupAt = 0;
+        overlay.unmuteTried = false;
+        try { clearTimeout(overlay.unmuteCheck); } catch { /* ignore */ }
+        overlay.unmuteCheck = 0;
+        overlay.lastStAt = 0;
         overlay.standby = false;
         overlay.adActive = true;
       } else {
@@ -957,6 +1019,11 @@
     overlay.healthyTicks = 0;
     overlay.nudgeTries = 0;
     overlay.lastSt = null;
+    overlay.catchupAt = 0;
+    overlay.unmuteTried = false;
+    try { clearTimeout(overlay.unmuteCheck); } catch { /* ignore */ }
+    overlay.unmuteCheck = 0;
+    overlay.lastStAt = 0;
     overlay.revealed = false;
     overlay.nativeHidden = false;
     // A standby is a clean player that is already running behind the native
@@ -1099,6 +1166,22 @@
       }
       if (m.t === 'st' && m.st) {
         overlay.lastSt = m.st;
+        overlay.lastStAt = Date.now();
+        // A clean player that drifted behind live must not be revealed: the
+        // user would see a delayed stream and a jump at ad-end. Seek forward
+        // inside the live window, at most every 2s, and let the healthy gate
+        // below hold the overlay hidden until latency is back under 20s.
+        if (overlay.adActive && typeof m.st.lat === 'number' && m.st.lat > 20) {
+          if (!overlay.catchupAt || Date.now() - overlay.catchupAt > 2000) {
+            overlay.catchupAt = Date.now();
+            overlaySend({ t: 'seek', s: Math.max(0, Number(m.st.pos) + m.st.lat - 3) });
+            overlaySend({ t: 'play' });
+            adLog('overlay-catchup', {
+              lat: +m.st.lat.toFixed(1),
+              pos: +Number(m.st.pos).toFixed(1),
+            });
+          }
+        }
         if (m.st.state === 'Playing') {
           // HAVE_FUTURE_DATA plus four seconds of forward buffer is the minimum
           // that survived the ad-heavy 2026-10-23 channels without a freeze.
@@ -1106,7 +1189,11 @@
           // (measured on the Necros long pod); a 2s buffer was not enough on
           // kimkataguiri (it drained one second after reveal). Keep the native
           // surface up until the clean player can survive several refreshes.
-          const healthy = (typeof m.st.rs !== 'number' || m.st.rs >= 3)
+          const latOk = !overlay.adActive
+            || typeof m.st.lat !== 'number'
+            || m.st.lat <= 20;
+          const healthy = latOk
+            && (typeof m.st.rs !== 'number' || m.st.rs >= 3)
             && (typeof m.st.buffered !== 'number' || m.st.buffered >= 4);
           if (!healthy) {
             // A single healthy heartbeat is not enough. The 2026-10-23 run

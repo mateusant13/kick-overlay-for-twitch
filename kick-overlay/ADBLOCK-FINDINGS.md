@@ -1,6 +1,6 @@
 # Twitch adblock — investigation log (for a future zero-context session)
 
-Last updated: 2026-10-24. Chrome 155 / Edge 155, extension **0.8.34**, persistent profile
+Last updated: 2026-10-25. Chrome 155 / Edge 155, extension **0.8.35**, persistent profile
 (`C:\Users\Administrador\Desktop\Nova pasta (3)\TESTE\VOD.RIP\vendor\kick-overlay`),
 CDP port 9222 (user Chrome) and 9335 (separate Edge test harness). Channels used for repro: `twitch.tv/duda` (pre-roll appears most
 reloads), `twitch.tv/zerggyyyy` (midroll after ~3 min), `twitch.tv/vegas`
@@ -1400,3 +1400,40 @@ Measured, same build, isolated Edge profile (9335):
 The cold path now covers the ad 4.4-4.6 s after it starts instead of missing
 the whole pod. The remaining delay is the clean source mint plus buffer time;
 it cannot be removed without revealing a frame that is still filling.
+
+## 0.8.35 (2026-10-25): unmute on reveal, catch up a drifted standby
+
+Real Chrome report on `srdogg`: the ad was replaced by silent content, and
+after the ad the stream looked delayed. The installed extension was still
+0.8.32 (`VOD.RIP\vendor\kick-overlay`), but both symptoms are design gaps that
+also exist in 0.8.34:
+
+- the clean player starts muted for autoplay and stayed muted until a click;
+- a standby that sat hidden while the tab was throttled can be far behind
+  live. In the owner's Chrome the clean player reported `lat=115.8 s` with
+  `dur=224 s`, so revealing it showed a delayed stream and then a jump at
+  ad-end.
+
+Changes:
+
+1. `revealOverlay()` sends `mute:false` and `play`, then checks the next state
+   after 1.5 s. If the player is still muted or paused, it re-mutes and leaves
+   the click-to-sound badge. Measured in the isolated Edge: `unmute-ok` 1.5 s
+   after reveal.
+2. An ad overlay with `lat > 20` seeks to `pos + lat - 3` (at most every 2 s)
+   and stays hidden until `lat <= 20`, `rs >= 3` and `buffered >= 4`.
+   A standby adopted with `lat > 20` does the same inside `revealOverlay()`
+   and gets a 12 s catch-up bound before the native surface is restored.
+
+Measured on `srdogg` (isolated Edge, 90 s):
+
+- `prewarm.fast` 1.5 s, `prewarm.ok` 2.0 s, ad at 2.15 s.
+- standby `lat=30`, `pos=0`, then `overlay-catchup`, reveal at 10.5 s.
+  A source switch rebuilt the frame and revealed again at 14.7 s;
+  `unmute-ok` at 16.2 s.
+- `ad-end` at 62.8 s, native resumed with `muted:false` and advancing
+  `currentTime`.
+
+Not verified in the owner's Chrome: its installed copy is still 0.8.32 and
+needs the 0.8.35 files plus an extension reload. The cold-preroll lead time
+(about 8 s on this run) is unchanged.

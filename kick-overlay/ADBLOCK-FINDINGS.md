@@ -1437,3 +1437,27 @@ Measured on `srdogg` (isolated Edge, 90 s):
 Not verified in the owner's Chrome: its installed copy is still 0.8.32 and
 needs the 0.8.35 files plus an extension reload. The cold-preroll lead time
 (about 8 s on this run) is unchanged.
+
+## 0.8.35 real Chrome, srdogg reload (2026-10-25 18:26)
+
+The owner reported an ad at the exact reload and a replay afterwards. The
+adlog confirms both, in the owner's Chrome with 0.8.35 loaded:
+
+- `overlay-reveal` at +7.4 s after boot: the cold preroll was visible for the
+  whole mint/buffer window. The cold-open bug is **not** fixed; the earlier
+  `fixed-not-verified` status is now falsified on a real cold open.
+- `unmute-ok` at +9.3 s (1.5 s after reveal): the clean overlay came back with
+  sound in real Chrome.
+- At ad-end the native `<video>` was replaced. The old element reported
+  `ct=36.1`; the replacement reported `ct=0.00`, then `0.70`, `2.20` on the
+  resume retries. That is the replay the owner saw.
+- The native live edge is its own `buffered.end` (209.8 s when measured), not
+  the clean window edge (200 s). Seeking the native to `2^30-2` stalls at
+  `rs=1`; seeking to the clean edge (198) also stalls while unbuffered.
+  Seeking to `buffered.end - 1.5` plays normally.
+
+Open work:
+1. Cover the cold preroll instead of showing it, at the cost of a black/loading
+   overlay for the mint window (~7 s on this run).
+2. Do not resume a replaced native element at `ct=0`; either wait for Twitch
+   to position it or seek inside its own buffered range and retry `play()`.

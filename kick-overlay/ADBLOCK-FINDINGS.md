@@ -1499,3 +1499,11 @@ keeping the clean frame longer.
 0.8.37 adds a 12 s bound to the cold cover: if the clean player never reveals,
 `stopAdOverlay('cold-cover-timeout')` restores the native instead of leaving a
 black frame.
+
+## 0.8.38: catch the native up to its own buffer at handoff
+
+At ad-end the native reported `ct=3.9` with buffered end `12.1`. Playing at 1x
+never closes that gap. `resumeNative` now seeks to `buffered.end - 0.5` when
+the buffer is more than 3 s ahead; the seek stays inside the buffered range
+and is instant. Measured manually on srdogg: seek to `buffered.end - 0.5`
+played without a stall (`ct` kept advancing, buffer stayed ~1.5 s ahead).

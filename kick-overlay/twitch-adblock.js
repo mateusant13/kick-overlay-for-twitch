@@ -533,6 +533,18 @@
   function resumeNative(v, tag) {
     if (!v || !v.isConnected) return;
     try {
+      // A native element that resumed behind its own buffered range plays at
+      // 1x and never closes the gap (measured srdogg 2026-10-25: ct=3.9 while
+      // buffered end was 12.1 at ad-end, ~10s behind the clean edge). Seeking
+      // inside the buffered range is instant and cuts the handoff delay.
+      const b = v.buffered;
+      const be = b && b.length ? b.end(b.length - 1) : 0;
+      if (be > v.currentTime + 3) {
+        const from = Number(v.currentTime || 0);
+        const target = be - 0.5;
+        v.currentTime = target;
+        adLog('native-catchup', { from: +from.toFixed(1), to: +target.toFixed(1) });
+      }
       // readyState 2 with paused=false is still a frozen frame. Nudge behind
       // live and call play() even when the element claims it is not paused.
       if (v.readyState < 3) nudgeNativeToBuffer(v);

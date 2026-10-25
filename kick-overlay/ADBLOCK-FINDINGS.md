@@ -1461,3 +1461,41 @@ Open work:
    overlay for the mint window (~7 s on this run).
 2. Do not resume a replaced native element at `ct=0`; either wait for Twitch
    to position it or seek inside its own buffered range and retry `play()`.
+
+## 0.8.36 (2026-10-25): cover the cold preroll, log the native handoff
+
+The 0.8.35 real-Chrome run showed the preroll for 7.4 s and then a native
+element replaced at `ct=0`. 0.8.36 changes the cold path and adds the missing
+measurement:
+
+1. `ad-hold` now covers the native immediately when the standby is not yet
+   playing: the frame goes to opacity 1, the native videos are hidden, and the
+   existing "sem anúncio · carregando…" badge is shown. The user sees a
+   black/loading player for the mint window instead of the ad. `revealOverlay()`
+   finishes normally when the clean player is healthy; the 12 s stall bound
+   still restores the native if it never gets there.
+2. `stopAdOverlay` logs `native-handoff` with `replaced`, `ct`, `buf`, `se`,
+   `cleanPos` and `cleanLat` before resuming. The next ad decides whether the
+   replacement at 0 is live or the DVR start.
+
+Not yet changed: the resume at `ct=0` itself. The handoff log is the evidence
+needed to choose between waiting for Twitch, seeking inside `buffered.end`, or
+keeping the clean frame longer.
+
+## 0.8.37 (2026-10-25): bound the cold cover
+
+0.8.36 measured in the owner's Chrome on `srdogg`: `cold-cover` fired at
+`ad-hold`, the owner saw about 2 s of black instead of the preroll, and
+`unmute-ok` followed the reveal.
+
+- `native-handoff`: `ct=3.9`, `buf=12.1`, `replaced=false`, `cleanPos=59.5`,
+  `cleanLat=10.5`. The native and the clean were at the same content point,
+  about 10.5 s behind the clean edge.
+- After the handoff the native advanced at 1x with a stable 1.55 s forward
+  buffer (`ct` 3.6 -> 8.6, `buf` 5.2 -> 10.2 in 5 s), i.e. at its own live
+  edge. The hidden clean standby showed ~20 s of latency because it is
+  throttled; it is not a live reference.
+
+0.8.37 adds a 12 s bound to the cold cover: if the clean player never reveals,
+`stopAdOverlay('cold-cover-timeout')` restores the native instead of leaving a
+black frame.

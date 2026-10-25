@@ -201,6 +201,8 @@
     // timer fires), which avoids the black frame.
     rewound: false,
     revealed: false,
+    coldCover: false,
+    coldTimer: 0,
     nativeHidden: false,
     hideTimer: 0,
     // Preloaded clean player. It runs muted at 1% opacity over the native
@@ -345,7 +347,7 @@
     if (overlay.badge) {
       // Keep the badge hidden while the native player is still the visible
       // surface; it appears together with the clean player.
-      overlay.badge.style.display = overlay.revealed ? 'block' : 'none';
+      overlay.badge.style.display = (overlay.revealed || overlay.coldCover) ? 'block' : 'none';
       overlay.badge.style.left = `${Math.round(r.left) + 12}px`;
       overlay.badge.style.top = `${Math.round(r.top) + 12}px`;
     }
@@ -660,6 +662,9 @@
       overlay.switchTries = 0;
       overlay.rewound = false;
       overlay.revealed = false;
+      overlay.coldCover = false;
+    try { clearTimeout(overlay.coldTimer); } catch { /* ignore */ }
+    overlay.coldTimer = 0;
       overlay.nativeHidden = false;
       overlay.standby = false;
       overlay.adActive = false;
@@ -685,6 +690,20 @@
     }
     try { overlay.frame.remove(); } catch { /* ignore */ }
     if (!wasStandby) {
+      // Handoff proof: the replaced element can start at 0 and replay the DVR
+      // start (measured srdogg 2026-10-25). Log the native position and the
+      // clean window before any resume call.
+      try {
+        const hv = mainVideo();
+        adLog('native-handoff', {
+          replaced: !!(hv && overlay.video && hv !== overlay.video),
+          ct: hv ? +Number(hv.currentTime || 0).toFixed(1) : null,
+          buf: hv && hv.buffered.length ? +hv.buffered.end(hv.buffered.length - 1).toFixed(1) : null,
+          se: hv && hv.seekable.length ? +hv.seekable.end(hv.seekable.length - 1).toFixed(1) : null,
+          cleanPos: overlay.lastSt ? +Number(overlay.lastSt.pos || 0).toFixed(1) : null,
+          cleanLat: overlay.lastSt ? +Number(overlay.lastSt.lat || 0).toFixed(1) : null,
+        });
+      } catch { /* ignore */ }
       const v = overlay.video && overlay.video.isConnected ? overlay.video : mainVideo();
       // restoreNativeVideos() restores every video's stored state, then the
       // main video's pre-overlay mute state wins (the stored value can be the
@@ -753,6 +772,9 @@
     overlay.onMessage = null;
     overlay.rewound = false;
     overlay.revealed = false;
+    overlay.coldCover = false;
+    try { clearTimeout(overlay.coldTimer); } catch { /* ignore */ }
+    overlay.coldTimer = 0;
     overlay.nativeHidden = false;
     overlay.standby = false;
     overlay.adActive = false;
@@ -812,6 +834,9 @@
     if (wasStandby || reason === 'standby') bypassStats.standbyHits++;
     if (!overlay.revealed) {
       overlay.revealed = true;
+      overlay.coldCover = false;
+    try { clearTimeout(overlay.coldTimer); } catch { /* ignore */ }
+    overlay.coldTimer = 0;
       try {
         overlay.frame.style.opacity = '1';
         overlay.frame.style.pointerEvents = 'auto';
@@ -1025,6 +1050,9 @@
     overlay.unmuteCheck = 0;
     overlay.lastStAt = 0;
     overlay.revealed = false;
+    overlay.coldCover = false;
+    try { clearTimeout(overlay.coldTimer); } catch { /* ignore */ }
+    overlay.coldTimer = 0;
     overlay.nativeHidden = false;
     // A standby is a clean player that is already running behind the native
     // surface; it becomes an ad only when ad-hold/ad-start sets adActive.
@@ -1377,6 +1405,21 @@
           /* ignore */
         }
         overlay.adActive = true;
+        // Cold preroll: the ad is already on screen and the clean source is
+        // still minting. Cover the native now instead of showing the ad. The
+        // badge explains the black/loading window; revealOverlay() finishes
+        // when the clean player is healthy, and the 12s stall bound restores
+        // the native if it never gets there (measured srdogg: reveal at 7.4s).
+        if (overlay.frame && !overlay.revealed && !overlay.playing) {
+          overlay.coldCover = true;
+          try { overlay.frame.style.opacity = '1'; } catch { /* ignore */ }
+          try { hideNativeVideos(); } catch { /* ignore */ }
+          adLog('cold-cover', { reason: 'ad-hold', ct: +Number(v.currentTime || 0).toFixed(1) });
+          try { clearTimeout(overlay.coldTimer); } catch { /* ignore */ }
+          overlay.coldTimer = setTimeout(() => {
+            if (overlay.coldCover && !overlay.revealed) stopAdOverlay('cold-cover-timeout');
+          }, 12000);
+        }
         // A warm standby is already playing the clean live edge. Reveal it
         // now: this is the 0s path. If it is still buffering, adopt it here:
         // adActive makes the Playing handler reveal it without waiting for

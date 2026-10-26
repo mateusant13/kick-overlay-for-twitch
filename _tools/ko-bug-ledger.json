@@ -18,12 +18,16 @@
         "Pre-fix code, unmuteHandler on document pointerdown: unmuted on ANY page click, regardless of the user's mute",
         "kick-overlay/mute-decision-test.cjs runs the real twitch-adblock.js through ad-hold -> ad-start -> frame ready -> 3 healthy Playing ticks -> reveal in a stubbed DOM: muted user gets no mute:false (and the badge offers click-to-sound), a generic page click does not unmute, a badge click does, ad-end restores the decision; an unmuted user still gets sound",
         "Its negative arm replays the pre-fix gate (`if (overlay.muteIntent)` -> `if (false)`) and the muted scenario then DOES see mute:false, so the detector is exercised in both directions",
-        "Gate: node _tools/ko-verify.mjs -> RESULT PASS checks=12 failed=0, including the new mute-decision check"
+        "Gate: node _tools/ko-verify.mjs -> RESULT PASS checks=12 failed=0, including the new mute-decision check",
+        "Owner Chrome 0.8.42, live twitch.tv/Caedrel (native player really playing: rs=4, currentTime 141.1 s), real reveal path through `stats.testOverlay(<live kick hls>)`. Arm muted: `overlay-reveal` at 30,153 ms (reason `playing`), `reveal-muted` at 30,158 / 31,100 / 32,094 ms, ZERO `unmute-ok`; badge `sem anúncio · 1080p · clique para som`; revealed frame muted=true, rs=4, t=31 s. Arm unmuted, same page: `overlay-reveal` 25,692 ms, `unmute-ok` 27,202 ms, no `reveal-muted`; badge `sem anúncio · 1080p` (no sound offer); revealed frame muted=false, rs=4, t=32.2 s. Two earlier runs reproduced the same split (4x reveal-muted and 3x reveal-muted vs 1x unmute-ok each)",
+        "The badge text is read with an anchored match on `sem anúncio ·`; the revealed frame is identified among several player.html targets by rs>=2 (a cold standby sits at rs=1, t=0). Both were initially mis-sampled (a Twitch promo banner and the idle standby), which is why the numbers above come from the corrected instrument",
+        "Why the trigger is synthetic: 150 s on live Caedrel with the native player playing, 141 samples -> 5 `ad-net` requests, 0 samples with a visible ad (visibility checked with getBoundingClientRect + computed style, ad label text matched), 0 native pauses, 0 `cold-cover`, 0 `overlay-reveal`; the worker rewrote the playlist to `index-muted-*.m3u8`. There was no ad on screen to cover, so a Twitch-served pod could not be the trigger",
+        "Sound: HTMLMediaElement.volume is pinned to 0 in the measurement tab (no browser-level mute exists in this CDP build: Browser.setMuted / Target.setMuted / Page.setAudioMuted all return \"wasn't found\"), and `muted` is left truthful, so the arm results are not artefacts of silencing"
       ],
-      "verified": false,
-      "verified_by": null,
+      "verified": true,
+      "verified_by": "lane, owner Chrome 0.8.42, live twitch.tv/Caedrel, two arms (muted / unmuted) through the real startAdOverlay -> healthy gate -> revealOverlay path",
       "owner_validation": "pending",
-      "next": "Owner: mute the stream, wait for an ad pod (or reload a channel with a preroll), then confirm the clean player stays silent, the badge says 'clique para som', and the native player comes back in the same mute state. NOT MEASURED: the real pod in the owner's Chrome."
+      "next": "Owner: when an ad actually paints (it did on 2026-10-25 srdogg), mute first and confirm the clean player stays silent and the badge offers som. The decision path itself is measured."
     },
     {
       "id": "KO-20261026-02",
@@ -46,12 +50,14 @@
         "Teardown branch unchanged: the 15s never-played watchdog fires because kickEverPlayed stays false and kickState stays Idle",
         "Fix 0.8.42, measured on a real youtube.com parent: the extension's own player.html iframe, created from the page the way content.js does it, delivered `ready` to the page at ms=108 BEFORE any inbound message; the frame reported firstPost.ready={ms:104,to:'*',learned:false}. After one valid getState the frame reports learned=true, learnedFrom={origin:'https://www.youtube.com',fromParent:true} at 2779ms and keeps posting",
         "Fix 0.8.42, unit arm: kick-overlay/bridge-handshake-test.cjs runs the real player-bridge.js against a parent that enforces targetOrigin like the browser (wrong origin = dropped, never delivered). 18 checks; its negative arm restores the pre-fix default and MUST see the drop, which it does. Gate check `bridge-handshake`",
-        "NOT re-measured: the full overlay mount on a YouTube watch page. The mapped kick channel rodil reports livestream.is_live=false right now, so the page never fetched a playback url (KO.activeUrl empty, KO.kickUrlT 0) and no layer mounted. External condition, unrelated to this fix"
+        "NOT re-measured: the full overlay mount on a YouTube watch page. The mapped kick channel rodil reports livestream.is_live=false right now, so the page never fetched a playback url (KO.activeUrl empty, KO.kickUrlT 0) and no layer mounted. External condition, unrelated to this fix",
+        "Owner Chrome 0.8.42, youtube.com/watch?v=0sfDth4lMLc with ko.v2 player=kick mapped to a LIVE Kick channel (n3on): wrap `ko-kick ko-placed`, firstWrapMs 25, firstPlayingMs 8,856, states null -> Buffering -> Playing, everPlayed true, frameSeq 1. Player region read from two screenshots 4 s apart: run A mean luminance 35.3 / sd 52.1 / 54.6 % dark, run B mean 34.8 / sd 50.5 / 53.6 % dark, picture moved. A black box would be mean ~0, sd ~0",
+        "Owner Chrome 0.8.42, same layer, 20-minute run: 120 samples, states {Playing: 120}, remounts 0, single player URL, errors 0, hls events 0, heap 208 -> 76 MB, no page exceptions"
       ],
-      "verified": false,
-      "verified_by": null,
-      "owner_validation": "not requested: needs a mapped channel whose kick side is live",
-      "next": "Owner: on a mapped channel whose kick side is live, open the YouTube watch page with ko.v2 player=kick and confirm the layer plays (kickReady=true, state Playing) instead of a black box. The guest-side falsifier is closed; the owner sample is still missing."
+      "verified": true,
+      "verified_by": "lane, owner Chrome 0.8.42, youtube.com watch page with player=kick mapped to live Kick n3on; luminance sampled from real screenshots",
+      "owner_validation": "not requested: the live-mapped case was measured in the owner Chrome",
+      "next": "Measured in the owner Chrome (see evidence). Owner may still eyeball the layer on his own mapped YouTube page."
     },
     {
       "id": "KO-20261026-01",
@@ -68,12 +74,13 @@
         "Guest Chrome, before the fix, SPA channel -> /rodil/videos: same pinned rect over the video grid (G:/Temp/opencode/ko-videos-now.png)",
         "Guest Chrome, after the fix, same SPA to /rodil/clips and /rodil/videos: #ko-wrap removed (null), native <video> resumed (paused:false)",
         "Guest Chrome, after the fix, back to /rodil: wrap re-mounted, ko-placed, rect 714x325 over the player (G:/Temp/opencode/ko-back-root.png)",
-        "kick-overlay/route-gate-test.cjs PASS: route contract, immediate hide on route change, no mount on a non-player route, no paint from an unplaced wrap"
+        "kick-overlay/route-gate-test.cjs PASS: route contract, immediate hide on route change, no mount on a non-player route, no paint from an unplaced wrap",
+        "Owner Chrome 0.8.42, live twitch.tv/n3on, real clicks (250 ms frame sampling): /n3on/clips coveredFrames 0 of 22, /n3on/videos 0 of 22, back on /n3on 32 of 32; kick state null -> Ready. The overlay leaves both sub-routes and returns on the root channel in the owner's own browser."
       ],
-      "verified": false,
-      "verified_by": null,
+      "verified": true,
+      "verified_by": "lane, owner Chrome 0.8.42, live twitch.tv/n3on, real Clips/Videos/back clicks (250 ms frames)",
       "owner_validation": "pending",
-      "next": "Owner: open a mapped channel, click the Clips tab, then Videos, then back to the channel. The overlay must be gone on both sub-pages and reappear over the player on the channel root."
+      "next": "Measured in the owner Chrome (see evidence): 0 covered frames on clips and videos, 32 of 32 on the channel root."
     },
     {
       "id": "KO-20261023-01",
@@ -88,12 +95,13 @@
       "evidence": [
         "Edge synthetic ad-hold + ad-start: reveal in 136-547 ms (2026-10-23)",
         "Edge real rodil: preroll at 3.3 s and 4.3 s beat the 2.6 s and 3.3 s fast prewarm; rebuilt and revealed at 6.8 s and 7.8 s",
-        "Edge offline duda: no standby and no retry loop"
+        "Edge offline duda: no standby and no retry loop",
+        "Owner Chrome 0.8.42, 2026-10-26: no real pod to time. 150 s on live twitch.tv/Caedrel with the native player playing (rs=4, ct 140.6 s, 141 samples): 5 `ad-net` requests, 0 samples with a visible ad (visibility by getBoundingClientRect + computed style, ad label text matched), 0 native pauses, 0 `cold-cover`, 0 `overlay-reveal`; the worker rewrote the playlist to `index-muted-*.m3u8`. Earlier 3 cold opens on twitch.tv/n3on: `ad-net` at 4.9-5.9 s with 4 segments, no cover, no reveal, and the native player never left rs=0 there (reproduced with the extension disabled). Twitch is not painting ads in this profile right now, so the 2 s reveal bound cannot be measured on a real pod"
       ],
       "verified": false,
       "verified_by": null,
       "owner_validation": "pending",
-      "next": "Owner F5 a real cold open on 0.8.32. If the reveal is still over 2 s, try a cached clean URL or an earlier worker start."
+      "next": "Blocked on one Twitch-served ad that actually paints (it did on 2026-10-25 srdogg). When that happens, a cold open gives coverMs and revealMs directly; the ad-path code already logs `cold-cover` and `overlay-reveal` with ms relative to navigation."
     }
   ]
 }

@@ -2,6 +2,27 @@
   "schema": 1,
   "bugs": [
     {
+      "id": "KO-20261026-02",
+      "title": "Black box over a YouTube watch page with player=kick (cause UNKNOWN)",
+      "state": "reported",
+      "author": "lane",
+      "reported": "2026-10-26",
+      "fixed_in": null,
+      "commit": null,
+      "hypothesis": "UNKNOWN. Measured: the kick IVS frame stays without `ready`, so the pending playback_url is never handed to it and the wrap covers the YouTube player with no source. Why `ready` never reaches the content script is not measured yet.",
+      "falsifier": "On https://www.youtube.com/watch?v=jfKfPfyJRdk with player=kick and a rodil mapping, the wrap does not cover the YouTube player, or KO.kickReady becomes true and the layer plays.",
+      "evidence": [
+        "Guest Chrome 2026-10-26, /watch?v=jfKfPfyJRdk, ko.v2 player=kick, mapping rodil -> {kick: rodil, yt: that video}: #ko-wrap display:block with ko-kick ko-placed ko-offline over the player (749x316 at 0,56) at 1s and still at 30s",
+        "Same run: #ko-ivs present with contentWindow, KO.kickReady false, KO.kickEverPlayed false, KO.kickState only 'Idle' from ~17s, KO.kickUrlT aging with the page",
+        "Same run, page-side capture listener armed at 4s: 14 messages in 13s, all st:Idle; no ready and no ev:error",
+        "Same run: wrap gone by ~40s, consistent with the never-played watchdog running on the 20s probe cadence (not proven which branch)"
+      ],
+      "verified": false,
+      "verified_by": null,
+      "owner_validation": "not requested (needs a reproduction in the owner's Chrome first)",
+      "next": "Instrument player.html and the content-script ready branch (token, ev.source vs KO.kickFrame.contentWindow at arrival, what the frame posted) before changing behavior. See TODO.md, 'Open: black box'."
+    },
+    {
       "id": "KO-20261026-01",
       "title": "Overlay pinned over a channel sub-route (clips/videos) after SPA navigation",
       "state": "fixed",

@@ -1,15 +1,69 @@
 # TODO - Kick & YouTube Overlay for Twitch
 
-**Status: COMPLETE.** Version **0.8.29** was validated by the owner in real use
-on 2026-10-23. Version **0.8.30** adds two follow-up fixes for YouTube mode and
-the YouTube-to-Kick fallback. Version **0.8.31** speeds up the cold preroll
-standby. Version **0.8.32** records the player 1:1 research and adds an
-official-site shortcut to the popup. There are no open code items; one owner
-validation remains.
+**Status:** Version **0.8.39** stops the overlay from following a stale player
+after an SPA navigation inside a channel (`/<canal>/clips`, `/videos`, …) and
+from doing the same on YouTube channel pages. The owner's click-through
+validation of 0.8.39 is with the manager. One item is open on purpose: a black
+box over a YouTube watch page with `player=kick`, cause **UNKNOWN** until its
+reproduction is finished (see "Open: black box" below).
 
 The detailed evidence for every fix is in
 `kick-overlay/ADBLOCK-FINDINGS.md`. Older revisions of this TODO, including the
 investigations that led to 0.8.8-0.8.29, remain in the git history.
+
+## 0.8.39 (2026-10-26)
+
+- [x] The overlay only mirrors a player on routes that own one. Twitch keeps
+  `.persistent-player` (and its `<video>`) in the DOM after an SPA navigation,
+  so the layer stayed pinned over `/<channel>/clips`, `/videos` and `/about`;
+  YouTube keeps `#movie_player` on channel pages. Guest Chrome, before/after on
+  `rodil`: wrap `display:block` at 730x142, 533x300 over the clips grid, then
+  removed with the native video resumed (`paused:false`); back on the channel
+  root it re-mounts over the player (714x325, `ko-placed`).
+  `overlayTargetRoute()` in `content.js`, enforced in `probe()` and `rectTick()`.
+- [x] `NOT_CHANNEL` also rejects single-segment pages that are not channels
+  (`clip`, `following`, `inventory`, `drops`, `squad`, `store`, `activate`).
+- [x] `twitchVideo()` ranks the player card inside `main` above portalled clip
+  viewers and sidebar hover previews.
+- [x] `#ko-wrap` stays `visibility:hidden` until the rect loop places it, so a
+  mounted wrap without a measured rect cannot paint at the top of its container.
+- [x] `kick-overlay/route-gate-test.cjs` runs inside `node _tools/ko-verify.mjs`
+  (check `route-gate`). Gate: `RESULT PASS checks=11 failed=0`.
+- [x] Vendor copy synced and the owner's extension reloaded to 0.8.39
+  (`loaded=0.8.38 expected=0.8.39` → `after=0.8.39`).
+- [ ] Owner click test: mapped channel → **Clips** → **Videos** → back to the
+  channel. The overlay must be absent on both sub-pages and cover the player on
+  the channel root.
+
+## Open: black box over a YouTube watch page with `player=kick` (cause UNKNOWN)
+
+Not part of 0.8.39. Reproduced in the isolated guest profile on 2026-10-26;
+not reproduced in the owner's Chrome, not claimed as fixed, cause not known.
+
+Reproduction:
+
+1. `node _tools/ko-harness.mjs start https://www.youtube.com --fresh`
+2. Write `ko.v2` with `{ enabled: true, player: "kick", mappings: { rodil: { kick: "rodil", yt: "https://www.youtube.com/watch?v=jfKfPfyJRdk" } } }`.
+3. Open `https://www.youtube.com/watch?v=jfKfPfyJRdk`.
+
+Measured: `#ko-wrap` is `display:block` with `ko-kick ko-placed ko-offline` over
+the YouTube player (749x316 at 0,56) from about 1s after load and still at 30s.
+`#ko-ivs` exists with a live `contentWindow`; `KO.kickReady` stays `false`,
+`KO.kickEverPlayed` stays `false`, `KO.kickUrlT` ages with the page, and
+`KO.kickState` only becomes `Idle` at about 17s. A capture listener on the page
+recorded 14 messages in 13s, all `st:Idle`; no `ready` and no `ev:error` arrived.
+The pending `playback_url` is only handed to the frame on `ready`, so the frame
+never loads a source. Because `probe()` runs on the 20s poll, the cover survives
+until the never-played watchdog branch runs (wrap gone by about 40s), and the
+next probe repeats the cycle.
+
+Acceptance for closing this item:
+
+- the same page and mapping, with the owner's Chrome as one of the samples;
+- the first `st` state and the message kinds observed at the page;
+- the measured reason `ready` never reaches the content script: token present,
+  `ev.source === KO.kickFrame.contentWindow` at the moment of arrival, and what
+  `player.html` posted. Instrument both sides before changing behavior.
 
 ## Final validation (2026-10-23)
 

@@ -27,11 +27,11 @@
     },
     {
       "id": "KO-20261026-02",
-      "title": "Black box over a YouTube watch page with player=kick (cause MEASURED: ready posted to the hardcoded twitch.tv origin)",
-      "state": "cause-isolated",
+      "title": "Black box over a YouTube watch page with player=kick (fixed in 0.8.42: `ready` was posted to the hardcoded twitch.tv origin)",
+      "state": "fixed",
       "author": "lane",
       "reported": "2026-10-26",
-      "fixed_in": null,
+      "fixed_in": "0.8.42",
       "commit": null,
       "hypothesis": "player-bridge.js posts `ready` to PARENT_ORIGIN, which is `https://www.twitch.tv` until a valid inbound message teaches the frame the real parent origin. On a youtube.com page the browser silently drops that post (targetOrigin mismatch), so the content script never sees `ready`, never hands over the pending playback_url, and the IVS player stays Idle until the 15s never-played watchdog tears the layer down. The origin is only learned when a kickSend lands AFTER the frame's load event (mute/volume/play from a later show), and `ready` is never re-posted, so the frame stays half-initialised for its whole life.",
       "falsifier": "CORRECTED by measurement (0.8.41). The pre-instrumentation falsifier ('KO.kickReady becomes true and the layer plays') is what the fix must satisfy; the measured falsifier for THIS cause is: a frame->page post with targetOrigin https://www.twitch.tv is actually delivered on a youtube.com page, or the frame reports `ready` accepted by the content script while `parentLearnedAt` is still 0.",
@@ -43,12 +43,15 @@
         "Primitive check, same frame: frame->page postMessage with targetOrigin 'https://www.twitch.tv' delivered 0 times (parent is youtube.com); page->frame with '*' delivered, and with the extension origin delivered",
         "Causal arm: one valid inbound getState from the page -> frame parentLearnedAt=8432ms, learnedFrom={origin:'https://www.youtube.com', fromParent:true}, inbound={total:1,accepted:1}; the page then accepts st immediately (accepted 0 -> 2, byType {st:2}, firstAt.st=9393). ready is still never accepted (readyFrame=null): it was posted once, at 684ms, before the origin was known",
         "Explains the earlier run in this ticket: st only started arriving at 21.4s, right after the first successful kickSend (mute/volume/play at 21.2s, sentByType {mute,volume,play}); before that showKickLayer's sends were blocked (KO.kickDiag.blockedSend=4) because KO.kickWin is only set on the frame's load event",
-        "Teardown branch unchanged: the 15s never-played watchdog fires because kickEverPlayed stays false and kickState stays Idle"
+        "Teardown branch unchanged: the 15s never-played watchdog fires because kickEverPlayed stays false and kickState stays Idle",
+        "Fix 0.8.42, measured on a real youtube.com parent: the extension's own player.html iframe, created from the page the way content.js does it, delivered `ready` to the page at ms=108 BEFORE any inbound message; the frame reported firstPost.ready={ms:104,to:'*',learned:false}. After one valid getState the frame reports learned=true, learnedFrom={origin:'https://www.youtube.com',fromParent:true} at 2779ms and keeps posting",
+        "Fix 0.8.42, unit arm: kick-overlay/bridge-handshake-test.cjs runs the real player-bridge.js against a parent that enforces targetOrigin like the browser (wrong origin = dropped, never delivered). 18 checks; its negative arm restores the pre-fix default and MUST see the drop, which it does. Gate check `bridge-handshake`",
+        "NOT re-measured: the full overlay mount on a YouTube watch page. The mapped kick channel rodil reports livestream.is_live=false right now, so the page never fetched a playback url (KO.activeUrl empty, KO.kickUrlT 0) and no layer mounted. External condition, unrelated to this fix"
       ],
       "verified": false,
       "verified_by": null,
-      "owner_validation": "not requested yet (no behaviour change shipped for this bug)",
-      "next": "Fix, not yet applied: make the frame address the parent before the origin is known (post to '*' until parentLearnedAt, and/or re-post `ready` when the origin is learned) so the handshake does not depend on a later kickSend. Falsifier for the fix: on the same URL the layer reaches kickReady=true and Playing, and the frame's firstPost.ready has learned=false but is still accepted by the page."
+      "owner_validation": "not requested: needs a mapped channel whose kick side is live",
+      "next": "Owner: on a mapped channel whose kick side is live, open the YouTube watch page with ko.v2 player=kick and confirm the layer plays (kickReady=true, state Playing) instead of a black box. The guest-side falsifier is closed; the owner sample is still missing."
     },
     {
       "id": "KO-20261026-01",

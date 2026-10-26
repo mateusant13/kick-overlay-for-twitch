@@ -1,9 +1,13 @@
 # TODO - Kick & YouTube Overlay for Twitch
 
-**Status:** Version **0.8.41** adds instrumentation only (no behaviour change)
-and names the cause of the YouTube `player=kick` black box: the IVS frame posts
-`ready` to the hardcoded `https://www.twitch.tv` origin, which the browser drops
-on a youtube.com page, so the handshake never starts. Version **0.8.40** makes
+**Status:** Version **0.8.42** fixes the black box over a YouTube watch page with
+`player=kick`: the IVS frame posted `ready` to the hardcoded
+`https://www.twitch.tv` origin, which the browser drops on a youtube.com page, so
+the handshake never started and the layer covered the video while the player sat
+Idle. The frame now addresses an unknown parent with `'*'` and switches to the
+exact origin as soon as a token-valid message teaches it. The cause and the fix
+are both measured in the guest Chrome; the owner's sample is still missing.
+Version **0.8.40** makes
 the ad path respect the user's last mute decision: a muted user keeps a muted
 clean player through an ad pod, and an unmute asked for during the pod survives
 the ad-end. Version **0.8.39** stops the overlay from following a stale player
@@ -15,10 +19,10 @@ The detailed evidence for every fix is in
 `kick-overlay/ADBLOCK-FINDINGS.md`. Older revisions of this TODO, including the
 investigations that led to 0.8.8-0.8.29, remain in the git history.
 
-## 0.8.41 (2026-10-26) instrumentation: black box over a YouTube watch page with `player=kick`
+## 0.8.42 (2026-10-26) fix: the YouTube `player=kick` black box
 
-Not part of 0.8.39. Reproduced in the isolated guest profile on 2026-10-26;
-not reproduced in the owner's Chrome, not claimed as fixed.
+Not part of 0.8.39. Cause measured in 0.8.41, fix below, measured in the guest
+profile; not yet reproduced or validated in the owner's Chrome.
 
 Reproduction:
 
@@ -81,15 +85,34 @@ after the frame's `load` event (that is the 21.2s `kickSend` in the earlier run,
 which is why `st` appeared at 21.4s and not before). `ready` is never re-posted,
 so that frame stays half-initialised until the watchdog tears it down.
 
-Instrumentation is in 0.8.41; the fix is NOT applied.
+### Fix, 0.8.42 (measured, not inferred)
 
-Proposed fix (needs the manager's go-ahead, new version): address the parent
-before the origin is known (post to `'*'` while `parentLearnedAt` is 0 — the
-message carries the per-page token and the content script still validates
-`ev.origin` and the source) and/or re-post `ready` when the origin is learned.
-Falsifier for the fix: on the same URL, `KO.kickReady` becomes true and the
-layer reaches `Playing`, with the frame's first `ready` post still
-`learned:false`.
+`player-bridge.js` no longer starts with a guessed parent: `PARENT_ORIGIN` begins
+as `null`, and `post()` addresses the parent with `'*'` only while the origin is
+unknown (`ready`, and anything else before the first valid inbound message).
+Every post after that first token-valid message uses that exact origin. The
+payload still carries the per-page token, the content script still checks
+`ev.origin` and the frame source, and the frame still only learns an origin from
+its allowed set.
+
+Measured on a real youtube.com parent in the guest Chrome: the extension's own
+`player.html` iframe, created from the page the way `content.js` does it,
+delivered `ready` to the page at **ms=108, before any inbound message**; the
+frame reported `firstPost.ready={ms:104,to:'*',learned:false}`. One valid
+`getState` then gave `learned=true`,
+`learnedFrom={origin:'https://www.youtube.com',fromParent:true}` at 2779ms, and
+the 1/s `st` kept arriving. Pre-fix the same primitive delivered 0 messages.
+
+`kick-overlay/bridge-handshake-test.cjs` (gate check `bridge-handshake`) runs the
+real `player-bridge.js` against a parent that enforces targetOrigin the way the
+browser does: 18 checks, including a negative arm that restores the pre-fix
+default and requires the `ready` drop to be caught, plus arms for the exact
+origin after learning, a foreign origin, and a wrong token.
+
+NOT measured: the full overlay mount on a YouTube watch page. The mapped kick
+channel `rodil` reports `livestream.is_live=false` right now, so the page never
+fetched a playback url (`KO.activeUrl` empty, `KO.kickUrlT` 0) and no layer
+mounted. That is an external condition, not this fix.
 
 Acceptance for closing this item:
 

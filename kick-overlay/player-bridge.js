@@ -13,8 +13,14 @@ const PLAYER_TOKEN = params.get('token');
 // same bridge also runs over youtube.com pages (the overlay's YT layer).
 // The actual origin is LEARNED from the first token-valid message — the
 // shared secret (PLAYER_TOKEN, minted per page by the content script) is
-// what authenticates the parent, not a hardcoded host — so replies never
-// need '*'. Until a valid message arrives, twitch.tv is the default.
+// what authenticates the parent, not a hardcoded host — so replies are
+// addressed to that exact origin afterwards. Until then the frame does not
+// know who its parent is, and a post to the wrong targetOrigin is dropped
+// silently by the browser (measured 2026-10-26: 0 deliveries for
+// https://www.twitch.tv from a youtube.com page, KO-20261026-02). `ready` is
+// emitted at load, before any inbound message can teach us the real parent,
+// so an unknown parent is addressed with '*'; the payload still carries the
+// per-page token, and the page still validates origin and source.
 const PARENT_ORIGINS = new Set([
   'https://www.twitch.tv',
   'https://www.youtube.com',
@@ -22,7 +28,7 @@ const PARENT_ORIGINS = new Set([
   'https://youtube.com',
   'https://youtu.be',
 ]);
-let PARENT_ORIGIN = 'https://www.twitch.tv';
+let PARENT_ORIGIN = null; // learned from the first token-valid message
 // 0.8.41 diag (KO-20261026-02). The black box on a YouTube watch page with
 // player=kick has one measured fact and no cause: the content script never
 // received `ready`, while `st` did arrive. Two things had to be measurable
@@ -35,6 +41,7 @@ const BRIDGE_DIAG = (window.__koBridgeDiag = {
   mode: HLS_MODE ? (TWITCH_HLS ? 'twitch-hls' : 'yt-hls') : 'ivs',
   token: PLAYER_TOKEN ? String(PLAYER_TOKEN).slice(0, 8) : null,
   parentOrigin: PARENT_ORIGIN,
+  learned: false,
   parentLearnedAt: 0,
   learnedFrom: null,
   posts: {},
@@ -54,19 +61,23 @@ window.addEventListener('unhandledrejection', (e) => beacon('ivs_page_err', { re
 const post = (m) => {
   if (!PLAYER_TOKEN) return;
   const d = BRIDGE_DIAG;
+  // Unknown parent (`ready` at load) goes to '*' so it cannot be dropped by a
+  // targetOrigin mismatch; every post after the first valid inbound message
+  // uses that exact origin.
+  const target = PARENT_ORIGIN || '*';
   d.posts[m.t] = (d.posts[m.t] || 0) + 1;
   if (!d.firstPost[m.t]) {
     // A post to the wrong targetOrigin is dropped by the browser with no
     // error, so the origin in effect is the fact worth keeping.
     d.firstPost[m.t] = {
       ms: Math.round(performance.now()),
-      to: PARENT_ORIGIN,
-      learned: !!d.parentLearnedAt,
+      to: target,
+      learned: !!d.learned,
       state: m.st ? m.st.state : null,
     };
   }
   try {
-    parent.postMessage({ __koKick: { ...m, _koToken: PLAYER_TOKEN } }, PARENT_ORIGIN);
+    parent.postMessage({ __koKick: { ...m, _koToken: PLAYER_TOKEN } }, target);
   } catch {
     d.postErrors++;
   }
@@ -95,7 +106,8 @@ function noteInbound(ev, stage, detail) {
     return;
   }
   d.inbound.accepted++;
-  if (!d.parentLearnedAt) {
+  if (!d.learned) {
+    d.learned = true;
     d.parentLearnedAt = Math.round(performance.now());
     d.learnedFrom = {
       origin: String(ev.origin || ''),

@@ -224,6 +224,23 @@ check('mute-decision', () => {
   return 'muted reveal + generic click + badge + ad-end, with the pre-fix negative arm';
 });
 
+// ---- 6b. bridge handshake (KO-20261026-02) -------------------------------
+// The IVS frame's `ready` used to be addressed to a hardcoded twitch.tv origin,
+// which the browser drops on a youtube.com page (measured: 0 deliveries), so
+// the content script never saw `ready` and the layer stayed a black box. This
+// runs the real player-bridge.js against a parent that enforces targetOrigin
+// like the browser, plus the pre-fix mutation as a negative arm.
+check('bridge-handshake', () => {
+  const rel = 'kick-overlay/bridge-handshake-test.cjs';
+  assert(existsSync(path.join(ROOT, rel)), `missing ${rel}`);
+  const r = spawnSync(process.execPath, [path.join(ROOT, rel)], {
+    cwd: path.join(ROOT, 'kick-overlay'),
+    encoding: 'utf8',
+  });
+  assert(r.status === 0, `${rel}: ${String(r.stderr || r.stdout || '').trim().slice(-320)}`);
+  return 'ready delivered to a youtube.com parent before learning, exact origin after, with the pre-fix negative arm';
+});
+
 // ---- 7. bug ledger -------------------------------------------------------
 // States are explicit. `fixed` is allowed; `verified` needs an independent
 // verifier. The receipt always prints FIXED, NOT VERIFIED for fixed-but-

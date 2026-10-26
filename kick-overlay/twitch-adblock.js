@@ -166,6 +166,14 @@
     video: null,
     wasMuted: false,
     wasVolume: 1,
+    // The user's last mute decision for the surface this overlay replaces.
+    // true = muted. Seeded from the native <video> at takeover (ad-hold or
+    // standby adoption), flipped only by an explicit badge click, and used
+    // both at reveal (a muted user keeps a muted picture) and at ad-end
+    // (restore the decision, not the transient state of whichever element
+    // happened to be playing). Owner report 2026-10-26: mute, then an ad
+    // swapped the player and the audio came back.
+    muteIntent: true,
     held: false,
     holdWasMuted: false,
     holdVolume: 1,
@@ -482,6 +490,18 @@
     requestStandby();
   }
 
+  // The ad path replaces the native surface; the user's mute decision belongs
+  // to that surface at the moment of the swap. Record it once per pod so
+  // reveal (never unmute a muted user) and ad-end (restore the decision) both
+  // read the same value. A warm standby was minted at page load, before any
+  // later mute, so its own capture can be stale.
+  function adoptNativeMute(v) {
+    if (!v) return;
+    overlay.muteIntent = !!v.muted;
+    overlay.wasMuted = !!v.muted;
+    if (Number.isFinite(v.volume)) overlay.wasVolume = v.volume;
+  }
+
   function restoreHeldMute() {
     if (!overlay.held) return;
     const v = overlay.video && overlay.video.isConnected ? overlay.video : mainVideo();
@@ -718,11 +738,12 @@
       } catch { /* ignore */ }
       const v = overlay.video && overlay.video.isConnected ? overlay.video : mainVideo();
       // restoreNativeVideos() restores every video's stored state, then the
-      // main video's pre-overlay mute state wins (the stored value can be the
-      // mute we applied in ad-hold/after hiding).
+      // main video's mute decision wins (the stored value can be the mute we
+      // applied in ad-hold/after hiding). The decision, not wasMuted, so an
+      // unmute the user asked for during the pod survives the ad-end.
       restoreNativeVideos();
       if (v) {
-        try { v.muted = overlay.wasMuted; } catch { /* ignore */ }
+        try { v.muted = overlay.muteIntent; } catch { /* ignore */ }
         try {
           if (Number.isFinite(overlay.wasVolume)) v.volume = overlay.wasVolume;
         } catch { /* ignore */ }
@@ -872,11 +893,16 @@
       hideNativeVideos();
       overlay.nativeHidden = true;
     }
-    // The clean player is started muted so Chrome can autoplay it. Once the
-    // frame actually covers the native surface, try to restore sound. If the
-    // browser refuses, keep the muted player and leave the click-to-sound
-    // badge; never trade a visible ad for a frozen clean frame.
-    if (!overlay.unmuteTried) {
+    // The clean player is started muted so Chrome can autoplay it. Sound is
+    // restored only when the user had sound on when the ad took over (or asked
+    // for it with the badge). A user who muted keeps a muted picture plus the
+    // click-to-sound badge, and if the browser refuses the unmute the muted
+    // player stays; never trade a visible ad for a frozen clean frame.
+    if (overlay.muteIntent) {
+      overlaySend({ t: 'mute', m: true });
+      overlaySend({ t: 'play' });
+      adLog('reveal-muted', { reason });
+    } else if (!overlay.unmuteTried) {
       overlay.unmuteTried = true;
       overlaySend({ t: 'mute', m: false });
       overlaySend({ t: 'play' });
@@ -1047,6 +1073,13 @@
     overlay.wasVolume = switchSource && Number.isFinite(prevWasVolume)
       ? prevWasVolume
       : (overlay.held ? overlay.holdVolume : (v ? v.volume : 1));
+    // A source switch inside a pod keeps the decision the user already made; a
+    // new pod adopts it from the surface being replaced. ad-hold / the standby
+    // adoption path refresh it from the DOM, because a standby is minted at
+    // page load and can predate the user's mute.
+    overlay.muteIntent = switchSource
+      ? overlay.muteIntent
+      : (overlay.held ? overlay.holdWasMuted : (v ? !!v.muted : overlay.muteIntent));
     overlay.held = false;
     overlay.startedAt = Date.now();
     overlay.ready = false;
@@ -1290,23 +1323,29 @@
     };
     window.addEventListener('message', overlay.onMessage);
 
-    // Unmute on the first user gesture anywhere on the page. The native player
-    // is covered by the iframe, so Twitch's own volume control is not
-    // reachable while the fallback is active.
-    overlay.unmuteHandler = () => {
+    // Sound is restored on request: the native player is covered by the iframe,
+    // so Twitch's own volume control is not reachable while the fallback is
+    // active. A badge click is an explicit request and always counts. A generic
+    // page click (chat, layout) only retries the autoplay unlock when the user
+    // had sound on to begin with: it must never overrule a mute.
+    const requestOverlaySound = (explicit) => {
       // Never unmute a hidden standby or a clean player that has not been
       // revealed. The standby runs 1.5-2s behind the native; unmuting it on a
       // click produced doubled/echoed audio (user report). Keep the handler
       // installed so the first click after reveal still unmutes.
       if (overlay.standby || !overlay.revealed) return;
+      if (!explicit && overlay.muteIntent) return;
+      overlay.muteIntent = false;
+      overlay.unmuteTried = true;
       overlaySend({ t: 'mute', m: false });
       overlaySend({ t: 'play' });
       if (overlay.badge) overlay.badge.textContent = 'sem anúncio · qualidade reduzida';
       try { document.removeEventListener('pointerdown', overlay.unmuteHandler, true); } catch { /* ignore */ }
       overlay.unmuteHandler = null;
     };
+    overlay.unmuteHandler = () => requestOverlaySound(false);
     try { document.addEventListener('pointerdown', overlay.unmuteHandler, true); } catch { /* ignore */ }
-    try { badge.addEventListener('click', overlay.unmuteHandler); } catch { /* ignore */ }
+    try { badge.addEventListener('click', () => requestOverlaySound(true)); } catch { /* ignore */ }
 
     // Watchdog: the clean master can still go ad-only on its media playlist.
     // The iframe reports that, but if hls.js simply never reaches Playing we
@@ -1407,6 +1446,10 @@
         overlay.held = true;
         overlay.holdWasMuted = v.muted;
         overlay.holdVolume = v.volume;
+        // This is the takeover moment: whatever the user last decided about
+        // sound applies to the clean player too. Refreshed here because a warm
+        // standby was created at page load, before a later mute.
+        if (!overlay.revealed) adoptNativeMute(v);
         // Mute immediately so the ad audio never plays. Do not hide the video
         // yet: the clean source is still being probed, and a black frame is
         // worse than one second of muted ad. startAdOverlay() covers it as
@@ -1445,6 +1488,9 @@
         if (!AD_OVERLAY_ENABLED) return;
         if (overlay.frame && overlay.standby) {
           overlay.adActive = true;
+          // ad-start can arrive without ad-hold; the mute decision still
+          // belongs to the native surface being covered.
+          if (!overlay.held && !overlay.revealed) adoptNativeMute(mainVideo());
           if (overlay.playing) {
             revealOverlay('standby');
             return;

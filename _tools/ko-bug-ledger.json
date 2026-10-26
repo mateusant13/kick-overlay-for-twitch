@@ -2,6 +2,30 @@
   "schema": 1,
   "bugs": [
     {
+      "id": "KO-20261026-03",
+      "title": "Ad player swap unmutes a user who had muted (ignores the last mute decision)",
+      "state": "fixed",
+      "author": "lane",
+      "reported": "2026-10-26",
+      "fixed_in": "0.8.40",
+      "commit": null,
+      "hypothesis": "The SSAI ad path covers Twitch with a separate clean hls.js frame that is started muted (Chrome autoplay). revealOverlay() then sent mute:false unconditionally. The native mute was captured (wasMuted/holdWasMuted) but only used to restore the native player at ad-end, so every pod handed sound back to a user who had muted. Two more paths broke the same decision: a warm standby minted at page load carried the mute state from load time (stale after a later mute), and the document-wide pointerdown handler unmuted on any click, including a click in chat. ad-end also restored wasMuted instead of the decision the user made during the pod (an explicit badge unmute was lost).",
+      "falsifier": "On a real Twitch live with a user-muted native player, the clean ad frame starts playing audio, or a click outside the badge restores audio, or the native player comes back unmuted/muted against the user's last decision.",
+      "evidence": [
+        "Owner report 2026-10-26: 'when i mute, the ad comes, player swaps, it unmutes. respect the last user decision.'",
+        "Pre-fix code, kick-overlay/twitch-adblock.js revealOverlay(): `if (!overlay.unmuteTried) { overlay.unmuteTried = true; overlaySend({ t: 'mute', m: false }); ... }` with no read of wasMuted/holdWasMuted",
+        "Pre-fix code, stopAdOverlay(): `v.muted = overlay.wasMuted` — captured at pod start, so an in-pod unmute was reverted",
+        "Pre-fix code, unmuteHandler on document pointerdown: unmuted on ANY page click, regardless of the user's mute",
+        "kick-overlay/mute-decision-test.cjs runs the real twitch-adblock.js through ad-hold -> ad-start -> frame ready -> 3 healthy Playing ticks -> reveal in a stubbed DOM: muted user gets no mute:false (and the badge offers click-to-sound), a generic page click does not unmute, a badge click does, ad-end restores the decision; an unmuted user still gets sound",
+        "Its negative arm replays the pre-fix gate (`if (overlay.muteIntent)` -> `if (false)`) and the muted scenario then DOES see mute:false, so the detector is exercised in both directions",
+        "Gate: node _tools/ko-verify.mjs -> RESULT PASS checks=12 failed=0, including the new mute-decision check"
+      ],
+      "verified": false,
+      "verified_by": null,
+      "owner_validation": "pending",
+      "next": "Owner: mute the stream, wait for an ad pod (or reload a channel with a preroll), then confirm the clean player stays silent, the badge says 'clique para som', and the native player comes back in the same mute state. NOT MEASURED: the real pod in the owner's Chrome."
+    },
+    {
       "id": "KO-20261026-02",
       "title": "Black box over a YouTube watch page with player=kick (cause UNKNOWN)",
       "state": "reported",

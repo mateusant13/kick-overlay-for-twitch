@@ -1507,3 +1507,37 @@ never closes that gap. `resumeNative` now seeks to `buffered.end - 0.5` when
 the buffer is more than 3 s ahead; the seek stays inside the buffered range
 and is instant. Measured manually on srdogg: seek to `buffered.end - 0.5`
 played without a stall (`ct` kept advancing, buffer stayed ~1.5 s ahead).
+
+## 0.8.40 (2026-10-26): respect the last mute decision across the swap
+
+Owner report: "when i mute, the ad comes, player swaps, it unmutes. respect the
+last user decision." Read from the code, not inferred:
+
+- `revealOverlay()` sent `overlaySend({ t: 'mute', m: false })` unconditionally.
+  The clean frame is started muted so Chrome can autoplay it, so that reveal was
+  the only place sound came back, and it did not look at the user.
+- The native mute WAS captured (`overlay.wasMuted` at `startAdOverlay`,
+  `overlay.holdWasMuted` at `ad-hold`, `restoreHeldMute()`), but only used at
+  ad-end to put the native player back.
+- `overlay.unmuteHandler` was bound to `document` `pointerdown`, so a click in
+  chat restored audio too. That is not a mute decision.
+- A warm standby is minted at page load; its `wasMuted` was the state at load,
+  not the state when the ad started. A mute in between was ignored.
+- `stopAdOverlay()` restored `overlay.wasMuted`, so an unmute asked for during
+  the pod (badge click) was reverted at ad-end.
+
+0.8.40 adds `overlay.muteIntent`: seeded from the native `<video>` at takeover
+(`adoptNativeMute()` in `ad-hold`, and in the `ad-start` standby adoption when
+no hold ran), carried across an in-pod source switch, flipped only by an
+explicit badge click, read at reveal (assert `mute:true` and keep the
+click-to-sound badge) and at ad-end (`v.muted = overlay.muteIntent`).
+
+`kick-overlay/mute-decision-test.cjs` drives the real script through
+`ad-hold -> ad-start -> ready -> 3 healthy Playing ticks -> reveal` in a stubbed
+DOM and asserts the posted `mute` messages, the badge text and the restored
+native state. Its negative arm replays the pre-fix gate
+(`if (overlay.muteIntent)` -> `if (false)`) and requires the muted scenario to
+see `mute:false`, so the detector is proven to fire.
+
+NOT MEASURED: a real pod in the owner's Chrome. The owner validation is a mute,
+an ad, silence plus the badge, and the native coming back muted.

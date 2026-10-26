@@ -205,6 +205,25 @@ check('route-gate', () => {
   return 'route contract + hide-on-route-change + no mount on non-player routes';
 });
 
+// ---- 6c. mute decision across a player swap (behavioural, no browser) -----
+// The ad path replaces the native player with a clean hls.js frame. That frame
+// is started muted for autoplay, and the pre-0.8.40 code unmuted it
+// unconditionally at reveal, so a user who had muted got sound back on every
+// ad pod (owner report 2026-10-26). This runs the real twitch-adblock.js
+// against a stubbed DOM through the real ad path and asserts the decision on
+// the wire, at the badge and at ad-end; its negative arm replays the pre-fix
+// gate and requires the detector to catch it.
+check('mute-decision', () => {
+  const rel = 'kick-overlay/mute-decision-test.cjs';
+  assert(existsSync(path.join(ROOT, rel)), `missing ${rel}`);
+  const r = spawnSync(process.execPath, [path.join(ROOT, rel)], {
+    cwd: path.join(ROOT, 'kick-overlay'),
+    encoding: 'utf8',
+  });
+  assert(r.status === 0, `${rel}: ${String(r.stderr || r.stdout || '').trim().slice(-320)}`);
+  return 'muted reveal + generic click + badge + ad-end, with the pre-fix negative arm';
+});
+
 // ---- 7. bug ledger -------------------------------------------------------
 // States are explicit. `fixed` is allowed; `verified` needs an independent
 // verifier. The receipt always prints FIXED, NOT VERIFIED for fixed-but-

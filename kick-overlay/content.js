@@ -237,7 +237,7 @@ const NOT_CHANNEL = new Set([
 
 // Build marker for the diag stream — lets us tell which code a tab runs
 // (content scripts of pre-reload tabs survive extension reloads).
-const KO_VER = '0.8.39';
+const KO_VER = '0.8.40';
 // ONE canonical yt state object: every reset site (boot, teardown, the
 // frame-death watchdog) must agree, or a drained/live flag survives a rebuild.
 function freshYtState() {

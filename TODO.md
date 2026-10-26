@@ -1,15 +1,41 @@
 # TODO - Kick & YouTube Overlay for Twitch
 
-**Status:** Version **0.8.39** stops the overlay from following a stale player
-after an SPA navigation inside a channel (`/<canal>/clips`, `/videos`, …) and
-from doing the same on YouTube channel pages. The owner's click-through
-validation of 0.8.39 is with the manager. One item is open on purpose: a black
-box over a YouTube watch page with `player=kick`, cause **UNKNOWN** until its
-reproduction is finished (see "Open: black box" below).
+**Status:** Version **0.8.40** makes the ad path respect the user's last mute
+decision: a muted user keeps a muted clean player through an ad pod, and an
+unmute asked for during the pod survives the ad-end. Version **0.8.39** stops
+the overlay from following a stale player after an SPA navigation inside a
+channel (`/<canal>/clips`, `/videos`, …) and from doing the same on YouTube
+channel pages. The owner's click-through validation of 0.8.39 is with the
+manager. One item is open on purpose: a black box over a YouTube watch page
+with `player=kick`, cause **UNKNOWN** until its reproduction is finished (see
+"Open: black box" below).
 
 The detailed evidence for every fix is in
 `kick-overlay/ADBLOCK-FINDINGS.md`. Older revisions of this TODO, including the
 investigations that led to 0.8.8-0.8.29, remain in the git history.
+
+## 0.8.40 (2026-10-26)
+
+- [x] The clean ad player no longer unmutes a user who had muted. Owner report:
+  "when i mute, the ad comes, player swaps, it unmutes. respect the last user
+  decision." `revealOverlay()` sent `mute:false` unconditionally; the native
+  mute was captured but only used to restore the native player at ad-end.
+  Now `overlay.muteIntent` holds the decision, seeded from the native `<video>`
+  at takeover (`adoptNativeMute()` on ad-hold and on a standby adoption, so a
+  standby minted at page load cannot carry a stale state), flipped only by an
+  explicit badge click, read at reveal (stay muted, badge says "clique para
+  som") and at ad-end (`v.muted = overlay.muteIntent`).
+- [x] A generic page click (chat, layout) no longer restores audio: the
+  document-wide `pointerdown` handler only retries the autoplay unlock when the
+  user had sound on. The badge click is the explicit request.
+- [x] `kick-overlay/mute-decision-test.cjs` runs the real `twitch-adblock.js`
+  through the real ad path in a stubbed DOM (ad-hold, ad-start, frame ready,
+  3 healthy `Playing` ticks, reveal) and asserts the wire messages, the badge
+  text and the ad-end restore. Its negative arm replays the pre-fix gate and
+  must see `mute:false`. Runs in the gate as check `mute-decision`.
+- [x] Gate: `RESULT PASS checks=12 failed=0`.
+- [ ] Owner validation: mute the stream, wait for a pod, confirm silence + the
+  click-to-sound badge, and that the native player returns muted.
 
 ## 0.8.39 (2026-10-26)
 

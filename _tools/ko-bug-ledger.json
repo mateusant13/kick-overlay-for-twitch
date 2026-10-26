@@ -32,7 +32,7 @@
       "author": "lane",
       "reported": "2026-10-26",
       "fixed_in": "0.8.42",
-      "commit": null,
+      "commit": "37e48d1",
       "hypothesis": "player-bridge.js posts `ready` to PARENT_ORIGIN, which is `https://www.twitch.tv` until a valid inbound message teaches the frame the real parent origin. On a youtube.com page the browser silently drops that post (targetOrigin mismatch), so the content script never sees `ready`, never hands over the pending playback_url, and the IVS player stays Idle until the 15s never-played watchdog tears the layer down. The origin is only learned when a kickSend lands AFTER the frame's load event (mute/volume/play from a later show), and `ready` is never re-posted, so the frame stays half-initialised for its whole life.",
       "falsifier": "CORRECTED by measurement (0.8.41). The pre-instrumentation falsifier ('KO.kickReady becomes true and the layer plays') is what the fix must satisfy; the measured falsifier for THIS cause is: a frame->page post with targetOrigin https://www.twitch.tv is actually delivered on a youtube.com page, or the frame reports `ready` accepted by the content script while `parentLearnedAt` is still 0.",
       "evidence": [

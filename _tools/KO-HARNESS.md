@@ -91,6 +91,47 @@ This gate does **not** replace `ko-harness.mjs check`; it proves static
 properties and detector behavior only. The live/harness suite remains the
 runtime gate.
 
+## Watching the owner's real live stream
+
+`ko-live-watch.mjs` captures the owner's Twitch tab (debug profile, `127.0.0.1:9222`)
+read-only and then explains what the owner actually saw. It does not click,
+navigate, or reload. Use it instead of a one-shot probe when the question is
+"did the ad-block rewind or skip the stream?".
+
+```powershell
+node _tools/ko-live-watch.mjs watch --tag=owner --every=500   # background capture
+node _tools/ko-live-watch.mjs state                           # one-shot snapshot
+node _tools/ko-live-watch.mjs report --tag=owner --from=22:52:40 --to=22:56:10
+node _tools/ko-live-watch.mjs stop --tag=owner
+```
+
+It samples at 500 ms: the page `<video>` (ct, paused, readyState, muted,
+`gap = buffered.end - ct`), the `#ko-adfix` opacity, the HLS iframe
+(`player.html?m=hls`) position, the adblock stats, and every new `ko.adlog`
+entry. Files go to `KO_WATCH_DIR` (default `G:/Temp/opencode`):
+`ko-live-<tag>.jsonl` and `.pid`.
+
+`report` prints a condensed timeline (seeks, rewinds, freezes, overlay
+appearing/leaving) and one block per ad pod: frozen duration, seeks after
+`ad-end`, when the picture came back, when the player reached the live edge,
+and how long a stale picture was exposed. A pod with no `ad-end` is reported as
+`SEM ad-end` with the resume inferred from the samples, because that is the
+path where the native player stays behind.
+
+`gap` is the latency proxy: on a live stream `seekable.end` returns `2^30` and
+is useless, but segments only exist up to the live edge, so
+`buffered.end - ct` approximates how far behind live the player sits. Anything
+above ~3 s on a visible native player is a visible delay.
+
+Two synthetic fixtures reproduce the measured pods (`fixture`, `fixture2` in
+`G:/Temp/opencode/fixture`, built by `make-fixture*.mjs`) so the analysis can be
+re-checked without a live stream:
+
+```powershell
+$env:KO_WATCH_DIR='G:\Temp\opencode\fixture'
+node _tools/ko-live-watch.mjs report --tag=fixture
+```
+
 ## What is NOT measured
 
 - A real cold preroll in the owner Chrome on the current build.

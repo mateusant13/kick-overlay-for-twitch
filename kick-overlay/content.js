@@ -230,11 +230,14 @@ const NOT_CHANNEL = new Set([
   'directory', 'downloads', 'friends', 'gift', 'jobs', 'login', 'notifications',
   'p', 'prime', 'settings', 'subscriptions', 'turbo', 'events', 'search',
   'wallet', 'moderation', 'popout', 'videos', 'clips', 'team', 'tags',
+  // Single-segment pages that are NOT a channel root either: they have no
+  // channel player (and no channel of that name — Twitch reserves the path).
+  'clip', 'following', 'inventory', 'drops', 'squad', 'store', 'activate',
 ]);
 
 // Build marker for the diag stream — lets us tell which code a tab runs
 // (content scripts of pre-reload tabs survive extension reloads).
-const KO_VER = '0.8.7';
+const KO_VER = '0.8.39';
 // ONE canonical yt state object: every reset site (boot, teardown, the
 // frame-death watchdog) must agree, or a drained/live flag survives a rebuild.
 function freshYtState() {
@@ -458,20 +461,73 @@ function currentSlug() {
   return s;
 }
 
-// Largest visible page <video> that is not ours — the active Twitch player.
-function twitchVideo() {
-  const vids = [...document.querySelectorAll('video')].filter((v) => v.getClientRects().length);
-  let best = null;
-  let bestArea = 0;
-  for (const v of vids) {
-    const r = v.getBoundingClientRect();
-    const a = r.width * r.height;
-    if (a > bestArea) {
-      bestArea = a;
-      best = v;
+// Is this route one whose PLAYER the overlay is allowed to mirror?
+// The overlay is a position:fixed layer that copies a player's viewport rect,
+// so it only makes sense where the page actually shows that player:
+//   Twitch  -> the channel root only (/<slug>). /<slug>/clips, /<slug>/videos,
+//              /<slug>/about, /clip/<id>, /directory/... are different layouts.
+//   YouTube -> the watch/live pages (and youtu.be). /@handle, /channel/...,
+//              /feed, /results, /shorts have no player slot to mirror.
+// Both hosts KEEP a stale player element in the DOM when you SPA away from a
+// player route (Twitch's .persistent-player keeps its old rect), so without
+// this gate the overlay followed that ghost and stayed pinned over the new
+// layout — the "/<channel>/clips breaks the page" bug (owner report
+// 2026-10-26). The route is the only reliable signal: the ghost element
+// still reports width/height and a plausible card ancestor.
+function overlayTargetRoute() {
+  if (onYtHost()) {
+    const p = location.pathname;
+    if (location.hostname === 'youtu.be') return /^\/[A-Za-z0-9_-]{6,20}(?:\/|$)/.test(p);
+    if (p === '/watch') {
+      try {
+        return !!new URLSearchParams(location.search).get('v');
+      } catch {
+        return false;
+      }
     }
+    return /^\/live\/[A-Za-z0-9_-]{6,20}(?:\/|$)/.test(p);
   }
-  return best;
+  // Twitch: exactly one path segment, and it must be a channel slug.
+  const segs = location.pathname.split('/').filter(Boolean);
+  if (segs.length !== 1) return false;
+  const s = decodeURIComponent(segs[0]).toLowerCase();
+  return /^[a-z0-9_]{2,25}$/.test(s) && !NOT_CHANNEL.has(s);
+}
+
+// Largest visible page <video> that is not ours — the active Twitch player.
+// Ranking (0.8.39): the channel player is a <video> inside a player CARD
+// (.video-ref / .video-player / .persistent-player) inside the page's MAIN
+// layout; Twitch portals the clip viewer modal and the sidebar hover preview
+// into a body-level root. Without the ranking the rect loop jumped the overlay
+// onto a clip modal opened from the channel page, and onto hover previews.
+// Every tier falls back to the next so an unexpected layout still resolves.
+function twitchVideo() {
+  const visible = [...document.querySelectorAll('video')].filter((v) => v.getClientRects().length);
+  const largest = (list) => {
+    let best = null;
+    let bestArea = 0;
+    for (const v of list) {
+      const r = v.getBoundingClientRect();
+      const a = r.width * r.height;
+      if (a > bestArea) {
+        bestArea = a;
+        best = v;
+      }
+    }
+    return best;
+  };
+  const inCard = (v) => {
+    for (let e = v, i = 0; e && i < 6; e = e.parentElement, i++) {
+      const cls = (e.className || '').toString();
+      if (cls.includes('video-ref') || cls.includes('video-player') || cls.includes('persistent-player')) return true;
+    }
+    return false;
+  };
+  const main = document.querySelector('main.twilight-main, main');
+  const canTestMain = !!(main && typeof main.contains === 'function');
+  const cards = visible.filter(inCard);
+  const cardsInMain = canTestMain ? cards.filter((v) => main.contains(v)) : [];
+  return largest(cardsInMain) || largest(cards) || largest(visible);
 }
 
 function twitchIsLive(v) {
@@ -1843,6 +1899,17 @@ async function probe() {
     teardown();
     return;
   }
+  // Route gate: only a route that actually hosts the mirrored player may run
+  // the overlay. Both hosts keep a ghost player element after an SPA
+  // navigation, so this is the ONLY reliable signal — see
+  // overlayTargetRoute(). Resuming "if ours" first hands back a channel player
+  // this overlay paused before the user left the player route.
+  if (!overlayTargetRoute()) {
+    resumeTwitchIfOurs();
+    setBadge('');
+    teardown();
+    return;
+  }
   if (onYtHost()) {
     // ---- YouTube page (inverse mapping) ---------------------------------
     KO.host = 'yt';
@@ -2408,6 +2475,15 @@ function rectTick() {
     const overlaySelected = KO.player !== 'twitch' && !!KO.wrap;
     const overlayShown = overlaySelected && KO.wrap.style.display !== 'none';
     if (overlayShown) {
+      // The SPA path poll is 900ms; do not spend that window mirroring a ghost
+      // player over a route that has no player of ours (clips/videos/directory,
+      // a YouTube channel page). Hide NOW; probe() tears the layer down.
+      if (!overlayTargetRoute()) {
+        hideWrap();
+        enforceOverlayRendering(false);
+        resumeTwitchIfOurs();
+        return;
+      }
       const pr = rectFromHost();
       if (pr) {
         const prev = KO.lastRect;
@@ -2428,6 +2504,7 @@ function rectTick() {
         s.top = `${top}px`;
         s.width = `${width}px`;
         s.height = `${height}px`;
+        KO.wrap.classList.add('ko-placed');
         // One-shot anomaly dump: the applied rect and the rendered box
         // disagree (the "mini player" symptom) — capture the constraint
         // source. Rate-limited 30s; renders fresh ground truth.
@@ -2492,6 +2569,7 @@ function rectTick() {
             s.top = `${lr.top}px`;
             s.width = `${lr.width}px`;
             s.height = `${lr.height}px`;
+            KO.wrap.classList.add('ko-placed');
           }
           if (KO.wrap.style.display === 'none') showWrap();
         }
@@ -2577,7 +2655,11 @@ function injectStyles() {
   const st = document.createElement('style');
   st.id = 'ko-style';
   st.textContent =
-    '#ko-wrap{position:fixed;z-index:5;pointer-events:none;background:#000;overflow:hidden;}' +
+    '#ko-wrap{position:fixed;z-index:5;pointer-events:none;background:#000;overflow:hidden;visibility:hidden;}' +
+    // Only a wrap that has been placed by the rect loop may paint: a mounted
+    // wrap has no left/top/width/height yet and would otherwise render at the
+    // top of its container (the "player fixed at the top of the page" look).
+    '#ko-wrap.ko-placed{visibility:visible;}' +
     '#ko-wrap #ko-ivs{width:100%;height:100%;border:0;display:block;pointer-events:none;}' +
     '#ko-wrap.ko-kick #ko-yt{display:none;}' + // one rendering: the inactive player is hidden, not covered
     '#ko-wrap.ko-yt #ko-ivs{display:none;}' +

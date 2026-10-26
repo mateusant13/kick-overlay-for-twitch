@@ -2,6 +2,28 @@
   "schema": 1,
   "bugs": [
     {
+      "id": "KO-20261026-01",
+      "title": "Overlay pinned over a channel sub-route (clips/videos) after SPA navigation",
+      "state": "fixed",
+      "author": "lane",
+      "reported": "2026-10-26",
+      "fixed_in": "0.8.39",
+      "commit": null,
+      "hypothesis": "Twitch keeps its .persistent-player element (and the <video> inside it) in the DOM after an SPA navigation to /<channel>/clips, /videos or /about. rectTick() mirrored that ghost rect, so the position:fixed layer stayed on top of the new layout instead of disappearing. Hosts also port the clip viewer and hover previews outside main, so 'largest visible video' could pick the wrong player on a channel page.",
+      "falsifier": "On /<channel>/clips (and /videos) the wrap is still display:block with a non-zero rect, or the overlay mounts there on a fresh load.",
+      "evidence": [
+        "Guest Chrome, before the fix, SPA channel -> /rodil/clips: #ko-wrap display:block, left 730.5 top 142.1 w 533 h 299.8 over the clips grid (screenshot G:/Temp/opencode/ko-clips-1600.png)",
+        "Guest Chrome, before the fix, SPA channel -> /rodil/videos: same pinned rect over the video grid (G:/Temp/opencode/ko-videos-now.png)",
+        "Guest Chrome, after the fix, same SPA to /rodil/clips and /rodil/videos: #ko-wrap removed (null), native <video> resumed (paused:false)",
+        "Guest Chrome, after the fix, back to /rodil: wrap re-mounted, ko-placed, rect 714x325 over the player (G:/Temp/opencode/ko-back-root.png)",
+        "kick-overlay/route-gate-test.cjs PASS: route contract, immediate hide on route change, no mount on a non-player route, no paint from an unplaced wrap"
+      ],
+      "verified": false,
+      "verified_by": null,
+      "owner_validation": "pending",
+      "next": "Owner: open a mapped channel, click the Clips tab, then Videos, then back to the channel. The overlay must be gone on both sub-pages and reappear over the player on the channel root."
+    },
+    {
       "id": "KO-20261023-01",
       "title": "Cold preroll native ad stays visible too long",
       "state": "fixed",

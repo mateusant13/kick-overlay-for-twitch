@@ -188,6 +188,23 @@ check('copy-slop.neg-arm', () => {
   return 'detector rejected the slop sample';
 });
 
+// ---- 6b. route gate (behavioural, no browser) -----------------------------
+// content.js is a position:fixed layer that mirrors a player rect. Both hosts
+// keep a ghost player in the DOM after an SPA navigation, so "which routes own
+// a mirrored player" is a contract that needs a test, not a comment. This runs
+// the real content.js in a stubbed DOM (owner report 2026-10-26:
+// twitch.tv/<channel>/clips left the overlay pinned over the clips grid).
+check('route-gate', () => {
+  const rel = 'kick-overlay/route-gate-test.cjs';
+  assert(existsSync(path.join(ROOT, rel)), `missing ${rel}`);
+  const r = spawnSync(process.execPath, [path.join(ROOT, rel)], {
+    cwd: path.join(ROOT, 'kick-overlay'),
+    encoding: 'utf8',
+  });
+  assert(r.status === 0, `${rel}: ${String(r.stderr || r.stdout || '').trim().slice(-320)}`);
+  return 'route contract + hide-on-route-change + no mount on non-player routes';
+});
+
 // ---- 7. bug ledger -------------------------------------------------------
 // States are explicit. `fixed` is allowed; `verified` needs an independent
 // verifier. The receipt always prints FIXED, NOT VERIFIED for fixed-but-

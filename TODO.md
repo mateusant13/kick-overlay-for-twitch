@@ -46,21 +46,38 @@ Reproduction:
 2. Write `ko.v2` with `{ enabled: true, player: "kick", mappings: { rodil: { kick: "rodil", yt: "https://www.youtube.com/watch?v=jfKfPfyJRdk" } } }`.
 3. Open `https://www.youtube.com/watch?v=jfKfPfyJRdk`.
 
-Measured: `#ko-wrap` is `display:block` with `ko-kick ko-placed ko-offline` over
-the YouTube player (749x316 at 0,56) from about 1s after load and still at 30s.
-`#ko-ivs` exists with a live `contentWindow`; `KO.kickReady` stays `false`,
-`KO.kickEverPlayed` stays `false`, `KO.kickUrlT` ages with the page, and
-`KO.kickState` only becomes `Idle` at about 17s. A capture listener on the page
-recorded 14 messages in 13s, all `st:Idle`; no `ready` and no `ev:error` arrived.
-The pending `playback_url` is only handed to the frame on `ready`, so the frame
-never loads a source. Because `probe()` runs on the 20s poll, the cover survives
-until the never-played watchdog branch runs (wrap gone by about 40s), and the
-next probe repeats the cycle.
+Measured (guest profile, 2026-10-26, 250ms sampling plus the content script's
+own console lines):
+
+- `#ko-wrap` covers the YouTube player, `display:block` with
+  `ko-kick ko-placed ko-offline`, 749x316 at (0,56), from 3.4s after load.
+- At the moment the box appears (3.4s) `#ko-ivs` already exists with a live
+  `contentWindow` (frame token `aaeaca`, `KO.frameSeq` 1): `KO.kickReady=false`,
+  `KO.kickState=null`, no state yet. The pending `playback_url` (u1) was set at
+  3.4s and is only handed to the frame on `ready`.
+- First and only frame state arrives at 22.9s: `Idle`. It stays `Idle`.
+  `KO.kickEverPlayed=false` for the whole run.
+- Page-side capture listener (separate run, armed at 4s): 14 messages in 13s,
+  all `st:Idle`; no `ready` and no `ev:error` ever arrived.
+- Teardown is the 15s never-played watchdog, measured by its own log line:
+  `[ko] kick url never played — teardown rodil Idle` at 41.8s, together with
+  `#ko-wrap` and `#ko-ivs` disappearing. It fires on the first probe that sees
+  both a non-null state and `urlAge > 15s`; the probe at 21.8s still saw
+  `kickState=null`, the next one at 41.8s qualified.
+- A new cycle starts at 62.9s (`KO.frameSeq` 2, new frame token `ad5f0b`, new
+  url u2): the box covers the player again. Visible cover ~38s, gap ~21s,
+  repeating.
+
+Cause of the missing `ready` is still **UNKNOWN**: it is not the message guard
+as far as measured (the same `post()` path delivers `st` with the token), but
+the arrival path was not instrumented inside the frame.
 
 Acceptance for closing this item:
 
-- the same page and mapping, with the owner's Chrome as one of the samples;
-- the first `st` state and the message kinds observed at the page;
+- the four reproduction facts above stay true and reproducible: exact video
+  URL, `player=kick`, the IVS frame state when the box appears, and the log line
+  that identifies the teardown branch;
+- the same sample in the owner's Chrome, not only the guest profile;
 - the measured reason `ready` never reaches the content script: token present,
   `ev.source === KO.kickFrame.contentWindow` at the moment of arrival, and what
   `player.html` posted. Instrument both sides before changing behavior.

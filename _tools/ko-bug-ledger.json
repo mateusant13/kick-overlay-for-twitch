@@ -9,13 +9,15 @@
       "reported": "2026-10-26",
       "fixed_in": null,
       "commit": null,
-      "hypothesis": "UNKNOWN. Measured: the kick IVS frame stays without `ready`, so the pending playback_url is never handed to it and the wrap covers the YouTube player with no source. Why `ready` never reaches the content script is not measured yet.",
+      "hypothesis": "UNKNOWN for the missing `ready`. Measured: the kick IVS frame exists with a live contentWindow, never reports `ready`, so the pending playback_url is never handed over and the frame sits at Idle while the wrap covers the YouTube player. Teardown is the 15s never-played watchdog (its own log line).",
       "falsifier": "On https://www.youtube.com/watch?v=jfKfPfyJRdk with player=kick and a rodil mapping, the wrap does not cover the YouTube player, or KO.kickReady becomes true and the layer plays.",
       "evidence": [
-        "Guest Chrome 2026-10-26, /watch?v=jfKfPfyJRdk, ko.v2 player=kick, mapping rodil -> {kick: rodil, yt: that video}: #ko-wrap display:block with ko-kick ko-placed ko-offline over the player (749x316 at 0,56) at 1s and still at 30s",
-        "Same run: #ko-ivs present with contentWindow, KO.kickReady false, KO.kickEverPlayed false, KO.kickState only 'Idle' from ~17s, KO.kickUrlT aging with the page",
-        "Same run, page-side capture listener armed at 4s: 14 messages in 13s, all st:Idle; no ready and no ev:error",
-        "Same run: wrap gone by ~40s, consistent with the never-played watchdog running on the 20s probe cadence (not proven which branch)"
+        "Video: https://www.youtube.com/watch?v=jfKfPfyJRdk, ko.v2 player=kick, mapping rodil -> {kick: rodil, yt: that video}",
+        "Guest Chrome 2026-10-26, wrap covers the YouTube player display:block ko-kick ko-placed ko-offline 749x316 at (0,56) from 3.4s after load",
+        "At the moment the box appears (3.4s): #ko-ivs exists with a live contentWindow (frame token aaeaca, frameSeq 1), KO.kickReady=false, KO.kickState=null; first and only state Idle at 22.9s; KO.kickEverPlayed=false all run",
+        "Page-side capture listener (separate run, armed at 4s): 14 messages in 13s, all st:Idle; no ready, no ev:error",
+        "Teardown branch measured by its own log line: '[ko] kick url never played - teardown rodil Idle' at 41.8s with #ko-wrap and #ko-ivs gone; the 21.8s probe still saw kickState=null, so the first qualifying probe was 41.8s",
+        "New cycle at 62.9s: frameSeq 2, new frame token ad5f0b, new url u2, box covers the player again (cover ~38s, gap ~21s)"
       ],
       "verified": false,
       "verified_by": null,

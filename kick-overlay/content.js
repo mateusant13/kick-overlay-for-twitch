@@ -237,7 +237,7 @@ const NOT_CHANNEL = new Set([
 
 // Build marker for the diag stream — lets us tell which code a tab runs
 // (content scripts of pre-reload tabs survive extension reloads).
-const KO_VER = '0.8.40';
+const KO_VER = '0.8.41';
 // ONE canonical yt state object: every reset site (boot, teardown, the
 // frame-death watchdog) must agree, or a drained/live flag survives a rebuild.
 function freshYtState() {
@@ -873,9 +873,19 @@ function throttledYtProbe() {
 function kickSend(o) {
   const f = KO.kickFrame;
   const token = f && f.dataset.koToken;
-  if (!KO.kickWin || !token) return;
+  if (!KO.kickWin || !token) {
+    // 0.8.41 diag: a command that never leaves the page cannot teach the frame
+    // its parent origin. Recorded, not changed.
+    const dd = KO.kickDiag || (KO.kickDiag = newKickDiag());
+    dd.blockedSend = (dd.blockedSend || 0) + 1;
+    return;
+  }
   try {
     KO.kickWin.postMessage({ __koKick: { ...o, _koToken: token } }, PLAYER_ORIGIN);
+    const ds = KO.kickDiag || (KO.kickDiag = newKickDiag());
+    ds.sent++;
+    ds.sentByType[o.t] = (ds.sentByType[o.t] || 0) + 1;
+    if (!ds.firstSentAt) ds.firstSentAt = { ms: Math.round(performance.now()), t: o.t, kind: o.e || null };
   } catch {
     /* frame gone */
   }
@@ -917,13 +927,75 @@ function kickFrame() {
   return fr;
 }
 
+// 0.8.41 diag (KO-20261026-02). The black box on a YouTube watch page with
+// player=kick was measured as "no ready reached the content script, st did".
+// Nothing said WHERE a message was lost, so these counters record every
+// __koKick message that reaches the page, every guard that drops it, and every
+// command the page sends into the frame (the frame learns the parent origin
+// from the first valid command). Counters only; no behaviour change. Read with
+// `eval "KO.kickDiag"` in the content-script world.
+function newKickDiag() {
+  return {
+    startedAt: Date.now(),
+    accepted: 0,
+    byType: {},
+    firstAt: {},
+    drops: {},
+    firstDrop: null,
+    sent: 0,
+    sentByType: {},
+    firstSentAt: null,
+    readyFrame: null,
+  };
+}
+function kickDiagSeen(m) {
+  const d = KO.kickDiag || (KO.kickDiag = newKickDiag());
+  d.accepted++;
+  const t = String(m.t || '(none)') + (m.e ? ':' + m.e : '');
+  d.byType[t] = (d.byType[t] || 0) + 1;
+  if (d.firstAt[t] === undefined) d.firstAt[t] = Math.round(performance.now());
+  if (t === 'ready') {
+    d.readyFrame = {
+      ms: Math.round(performance.now()),
+      token: String(m._koToken || '').slice(0, 8),
+      frameToken: String((KO.kickFrame && KO.kickFrame.dataset && KO.kickFrame.dataset.koToken) || '').slice(0, 8),
+      frameSeq: KO.frameSeq,
+      hadPendingUrl: !!KO.pendingUrl,
+      kickReadyBefore: !!KO.kickReady,
+    };
+  }
+}
+function kickDiagDrop(reason, m) {
+  const d = KO.kickDiag || (KO.kickDiag = newKickDiag());
+  d.drops[reason] = (d.drops[reason] || 0) + 1;
+  if (!d.firstDrop) {
+    d.firstDrop = {
+      reason,
+      type: String((m && m.t) || '(none)'),
+      ms: Math.round(performance.now()),
+      hasFrame: !!KO.kickFrame,
+      frameSeq: KO.frameSeq,
+    };
+  }
+}
+
 window.addEventListener('message', (ev) => {
   const d = ev.data;
-  if (!d || !d.__koKick || ev.origin !== PLAYER_ORIGIN) return;
+  if (!d || !d.__koKick || ev.origin !== PLAYER_ORIGIN) {
+    if (d && d.__koKick) kickDiagDrop('origin', d.__koKick);
+    return;
+  }
   const ytf = document.getElementById('ko-yt');
-  if (ytf && ev.source === ytf.contentWindow) return; // the yt (hls) frame — handled by the yt listener
-  if (!KO.kickFrame || ev.source !== KO.kickFrame.contentWindow) return;
+  if (ytf && ev.source === ytf.contentWindow) {
+    kickDiagDrop('yt-frame', d.__koKick);
+    return; // the yt (hls) frame — handled by the yt listener
+  }
+  if (!KO.kickFrame || ev.source !== KO.kickFrame.contentWindow) {
+    kickDiagDrop('source', d.__koKick);
+    return;
+  }
   const m = d.__koKick;
+  kickDiagSeen(m);
   if (m.t === 'levels') {
     KO.kickState = KO.kickState || {};
     KO.kickState.qualities = Array.isArray(m.levels) ? m.levels : [];

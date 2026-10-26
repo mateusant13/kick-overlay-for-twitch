@@ -23,6 +23,25 @@ const PARENT_ORIGINS = new Set([
   'https://youtu.be',
 ]);
 let PARENT_ORIGIN = 'https://www.twitch.tv';
+// 0.8.41 diag (KO-20261026-02). The black box on a YouTube watch page with
+// player=kick has one measured fact and no cause: the content script never
+// received `ready`, while `st` did arrive. Two things had to be measurable
+// instead of assumed: (a) what this frame actually posted, to which origin,
+// and whether the parent origin had been learned at that moment, and (b) what
+// arrived from the parent and what was rejected. Counters only; no behaviour
+// change. Read it from the harness with `eval --target=ivs "__koBridgeDiag"`.
+const BRIDGE_DIAG = (window.__koBridgeDiag = {
+  startedAt: Date.now(),
+  mode: HLS_MODE ? (TWITCH_HLS ? 'twitch-hls' : 'yt-hls') : 'ivs',
+  token: PLAYER_TOKEN ? String(PLAYER_TOKEN).slice(0, 8) : null,
+  parentOrigin: PARENT_ORIGIN,
+  parentLearnedAt: 0,
+  learnedFrom: null,
+  posts: {},
+  firstPost: {},
+  postErrors: 0,
+  inbound: { total: 0, accepted: 0, rejected: 0, byOrigin: {}, firstReject: null },
+});
 const beacon = (ev, data) => {
   try {
     chrome.runtime.sendMessage({ __koDiag: { ev, data } }, () => void chrome.runtime.lastError);
@@ -34,12 +53,57 @@ window.addEventListener('error', (e) => beacon('ivs_page_err', { msg: String((e 
 window.addEventListener('unhandledrejection', (e) => beacon('ivs_page_err', { rej: String((e && e.reason) || '').slice(0, 150) }));
 const post = (m) => {
   if (!PLAYER_TOKEN) return;
+  const d = BRIDGE_DIAG;
+  d.posts[m.t] = (d.posts[m.t] || 0) + 1;
+  if (!d.firstPost[m.t]) {
+    // A post to the wrong targetOrigin is dropped by the browser with no
+    // error, so the origin in effect is the fact worth keeping.
+    d.firstPost[m.t] = {
+      ms: Math.round(performance.now()),
+      to: PARENT_ORIGIN,
+      learned: !!d.parentLearnedAt,
+      state: m.st ? m.st.state : null,
+    };
+  }
   try {
     parent.postMessage({ __koKick: { ...m, _koToken: PLAYER_TOKEN } }, PARENT_ORIGIN);
   } catch {
-    /* parent gone */
+    d.postErrors++;
   }
 };
+
+// Shared inbound bookkeeping for both engines (HLS and IVS listeners below).
+function noteInbound(ev, stage, detail) {
+  const d = BRIDGE_DIAG;
+  if (stage === 'head') {
+    d.inbound.total++;
+    const o = String((ev && ev.origin) || '(none)');
+    d.inbound.byOrigin[o] = (d.inbound.byOrigin[o] || 0) + 1;
+    return;
+  }
+  if (stage === 'reject') {
+    d.inbound.rejected++;
+    if (!d.inbound.firstReject) {
+      d.inbound.firstReject = {
+        ms: Math.round(performance.now()),
+        origin: String((ev && ev.origin) || '(none)'),
+        fromParent: !!(ev && ev.source === window.parent),
+        hasKick: !!(ev && ev.data && ev.data.__koKick),
+        reason: String(detail || ''),
+      };
+    }
+    return;
+  }
+  d.inbound.accepted++;
+  if (!d.parentLearnedAt) {
+    d.parentLearnedAt = Math.round(performance.now());
+    d.learnedFrom = {
+      origin: String(ev.origin || ''),
+      fromParent: ev.source === window.parent,
+      t: String(detail && detail.t),
+    };
+  }
+}
 
 // Keyboard relay (0.8.6, pain 2): when focus lives INSIDE the extension-page
 // iframe (after the user clicks the player — the host's document-level
@@ -306,9 +370,17 @@ if (HLS_MODE) {
   };
   const sendSt = () => post({ t: 'st', st: st() });
   window.addEventListener('message', (ev) => {
-    if (ev.source !== window.parent || !PARENT_ORIGINS.has(ev.origin)) return;
+    noteInbound(ev, 'head');
+    if (ev.source !== window.parent || !PARENT_ORIGINS.has(ev.origin)) {
+      noteInbound(ev, 'reject', 'source-or-origin');
+      return;
+    }
     const m = ev.data && ev.data.__koKick;
-    if (!m || m._koToken !== PLAYER_TOKEN) return;
+    if (!m || m._koToken !== PLAYER_TOKEN) {
+      noteInbound(ev, 'reject', m ? 'token' : 'no-koKick');
+      return;
+    }
+    noteInbound(ev, 'accept', m);
     PARENT_ORIGIN = ev.origin; // answers follow the page that owns us
     switch (m.t) {
       case 'load':
@@ -534,9 +606,17 @@ function sendSt() {
 }
 
 window.addEventListener('message', (ev) => {
-  if (ev.source !== window.parent || !PARENT_ORIGINS.has(ev.origin)) return;
+  noteInbound(ev, 'head');
+  if (ev.source !== window.parent || !PARENT_ORIGINS.has(ev.origin)) {
+    noteInbound(ev, 'reject', 'source-or-origin');
+    return;
+  }
   const m = ev.data && ev.data.__koKick;
-  if (!m || m._koToken !== PLAYER_TOKEN) return;
+  if (!m || m._koToken !== PLAYER_TOKEN) {
+    noteInbound(ev, 'reject', m ? 'token' : 'no-koKick');
+    return;
+  }
+  noteInbound(ev, 'accept', m);
   PARENT_ORIGIN = ev.origin; // answers follow the page that owns us
   switch (m.t) {
     case 'load':

@@ -1,18 +1,102 @@
 # TODO - Kick & YouTube Overlay for Twitch
 
-**Status:** Version **0.8.40** makes the ad path respect the user's last mute
-decision: a muted user keeps a muted clean player through an ad pod, and an
-unmute asked for during the pod survives the ad-end. Version **0.8.39** stops
-the overlay from following a stale player after an SPA navigation inside a
-channel (`/<canal>/clips`, `/videos`, …) and from doing the same on YouTube
-channel pages. The owner's click-through validation of 0.8.39 is with the
-manager. One item is open on purpose: a black box over a YouTube watch page
-with `player=kick`, cause **UNKNOWN** until its reproduction is finished (see
-"Open: black box" below).
+**Status:** Version **0.8.41** adds instrumentation only (no behaviour change)
+and names the cause of the YouTube `player=kick` black box: the IVS frame posts
+`ready` to the hardcoded `https://www.twitch.tv` origin, which the browser drops
+on a youtube.com page, so the handshake never starts. Version **0.8.40** makes
+the ad path respect the user's last mute decision: a muted user keeps a muted
+clean player through an ad pod, and an unmute asked for during the pod survives
+the ad-end. Version **0.8.39** stops the overlay from following a stale player
+after an SPA navigation inside a channel (`/<canal>/clips`, `/videos`, …) and
+from doing the same on YouTube channel pages. The owner's click-through
+validation of 0.8.39 is with the manager.
 
 The detailed evidence for every fix is in
 `kick-overlay/ADBLOCK-FINDINGS.md`. Older revisions of this TODO, including the
 investigations that led to 0.8.8-0.8.29, remain in the git history.
+
+## 0.8.41 (2026-10-26) instrumentation: black box over a YouTube watch page with `player=kick`
+
+Not part of 0.8.39. Reproduced in the isolated guest profile on 2026-10-26;
+not reproduced in the owner's Chrome, not claimed as fixed.
+
+Reproduction:
+
+1. `node _tools/ko-harness.mjs start https://www.youtube.com --fresh`
+2. Write `ko.v2` with `{ enabled: true, player: "kick", mappings: { rodil: { kick: "rodil", yt: "https://www.youtube.com/watch?v=jfKfPfyJRdk" } } }`.
+3. Open `https://www.youtube.com/watch?v=jfKfPfyJRdk`.
+
+Measured before instrumentation (guest profile, 2026-10-26, 250ms sampling plus
+the content script's own console lines):
+
+- `#ko-wrap` covers the YouTube player, `display:block` with
+  `ko-kick ko-placed ko-offline`, 749x316 at (0,56), from 3.4s after load.
+- At the moment the box appears (3.4s) `#ko-ivs` already exists with a live
+  `contentWindow` (frame token `aaeaca`, `KO.frameSeq` 1): `KO.kickReady=false`,
+  `KO.kickState=null`, no state yet. The pending `playback_url` (u1) was set at
+  3.4s and is only handed to the frame on `ready`.
+- First and only frame state arrives at 22.9s: `Idle`. It stays `Idle`.
+  `KO.kickEverPlayed=false` for the whole run.
+- Page-side capture listener (separate run, armed at 4s): 14 messages in 13s,
+  all `st:Idle`; no `ready` and no `ev:error` ever arrived.
+- Teardown is the 15s never-played watchdog, measured by its own log line:
+  `[ko] kick url never played — teardown rodil Idle` at 41.8s, together with
+  `#ko-wrap` and `#ko-ivs` disappearing. It fires on the first probe that sees
+  both a non-null state and `urlAge > 15s`; the probe at 21.8s still saw
+  `kickState=null`, the next one at 41.8s qualified.
+- A new cycle starts at 62.9s (`KO.frameSeq` 2, new frame token `ad5f0b`, new
+  url u2): the box covers the player again. Visible cover ~38s, gap ~21s,
+  repeating.
+
+### Cause, measured (0.8.41), not inferred
+
+0.8.41 adds counters only: `KO.kickDiag` in `content.js` (what reached the page,
+which guard dropped it, what the page sent) and `window.__koBridgeDiag` in
+`player-bridge.js` (what the frame posted, to which origin, whether the parent
+origin had been learned, and what it received). Nothing changes behaviour.
+
+One correlated sample, guest Chrome, frame token `d20935ab` equal on both sides:
+
+- Frame: `posts.ready=1` at ms=684, `to: "https://www.twitch.tv"`,
+  `learned:false`; `posts.st` also to `twitch.tv`; `parentLearnedAt=0`;
+  `inbound.total=0`.
+- Page: `accepted=0`, `drops={}` — nothing was dropped by the page guards
+  (`origin`, `source`, `yt-frame`), `KO.kickReady=false`, `KO.pendingUrl=true`.
+- Primitive check on the same frame: a frame→page `postMessage` with
+  targetOrigin `https://www.twitch.tv` is delivered **0 times** when the parent
+  is `youtube.com`; page→frame with `'*'` and with the extension origin are both
+  delivered.
+- Causal arm: ONE valid inbound `getState` makes the frame report
+  `parentLearnedAt=8432ms`, `learnedFrom={origin:"https://www.youtube.com",
+  fromParent:true}`; the page immediately accepts `st` (0 → 2,
+  `firstAt.st=9393`). `ready` is still never accepted: it was posted once, at
+  684ms, before the origin was known.
+
+So: `player-bridge.js` posts `ready` to `PARENT_ORIGIN`, which stays
+`https://www.twitch.tv` until a valid inbound message teaches the frame the real
+parent. On a youtube.com page the browser silently drops that post (targetOrigin
+mismatch). The content script only sends `load` on `ready`, so the handshake is
+circular. It is broken open only when some later show sends `mute/volume/play`
+after the frame's `load` event (that is the 21.2s `kickSend` in the earlier run,
+which is why `st` appeared at 21.4s and not before). `ready` is never re-posted,
+so that frame stays half-initialised until the watchdog tears it down.
+
+Instrumentation is in 0.8.41; the fix is NOT applied.
+
+Proposed fix (needs the manager's go-ahead, new version): address the parent
+before the origin is known (post to `'*'` while `parentLearnedAt` is 0 — the
+message carries the per-page token and the content script still validates
+`ev.origin` and the source) and/or re-post `ready` when the origin is learned.
+Falsifier for the fix: on the same URL, `KO.kickReady` becomes true and the
+layer reaches `Playing`, with the frame's first `ready` post still
+`learned:false`.
+
+Acceptance for closing this item:
+
+- the four reproduction facts above stay true and reproducible: exact video
+  URL, `player=kick`, the IVS frame state when the box appears, and the log line
+  that identifies the teardown branch;
+- the same sample in the owner's Chrome, not only the guest profile.
 
 ## 0.8.40 (2026-10-26)
 
@@ -60,53 +144,6 @@ investigations that led to 0.8.8-0.8.29, remain in the git history.
 - [ ] Owner click test: mapped channel → **Clips** → **Videos** → back to the
   channel. The overlay must be absent on both sub-pages and cover the player on
   the channel root.
-
-## Open: black box over a YouTube watch page with `player=kick` (cause UNKNOWN)
-
-Not part of 0.8.39. Reproduced in the isolated guest profile on 2026-10-26;
-not reproduced in the owner's Chrome, not claimed as fixed, cause not known.
-
-Reproduction:
-
-1. `node _tools/ko-harness.mjs start https://www.youtube.com --fresh`
-2. Write `ko.v2` with `{ enabled: true, player: "kick", mappings: { rodil: { kick: "rodil", yt: "https://www.youtube.com/watch?v=jfKfPfyJRdk" } } }`.
-3. Open `https://www.youtube.com/watch?v=jfKfPfyJRdk`.
-
-Measured (guest profile, 2026-10-26, 250ms sampling plus the content script's
-own console lines):
-
-- `#ko-wrap` covers the YouTube player, `display:block` with
-  `ko-kick ko-placed ko-offline`, 749x316 at (0,56), from 3.4s after load.
-- At the moment the box appears (3.4s) `#ko-ivs` already exists with a live
-  `contentWindow` (frame token `aaeaca`, `KO.frameSeq` 1): `KO.kickReady=false`,
-  `KO.kickState=null`, no state yet. The pending `playback_url` (u1) was set at
-  3.4s and is only handed to the frame on `ready`.
-- First and only frame state arrives at 22.9s: `Idle`. It stays `Idle`.
-  `KO.kickEverPlayed=false` for the whole run.
-- Page-side capture listener (separate run, armed at 4s): 14 messages in 13s,
-  all `st:Idle`; no `ready` and no `ev:error` ever arrived.
-- Teardown is the 15s never-played watchdog, measured by its own log line:
-  `[ko] kick url never played — teardown rodil Idle` at 41.8s, together with
-  `#ko-wrap` and `#ko-ivs` disappearing. It fires on the first probe that sees
-  both a non-null state and `urlAge > 15s`; the probe at 21.8s still saw
-  `kickState=null`, the next one at 41.8s qualified.
-- A new cycle starts at 62.9s (`KO.frameSeq` 2, new frame token `ad5f0b`, new
-  url u2): the box covers the player again. Visible cover ~38s, gap ~21s,
-  repeating.
-
-Cause of the missing `ready` is still **UNKNOWN**: it is not the message guard
-as far as measured (the same `post()` path delivers `st` with the token), but
-the arrival path was not instrumented inside the frame.
-
-Acceptance for closing this item:
-
-- the four reproduction facts above stay true and reproducible: exact video
-  URL, `player=kick`, the IVS frame state when the box appears, and the log line
-  that identifies the teardown branch;
-- the same sample in the owner's Chrome, not only the guest profile;
-- the measured reason `ready` never reaches the content script: token present,
-  `ev.source === KO.kickFrame.contentWindow` at the moment of arrival, and what
-  `player.html` posted. Instrument both sides before changing behavior.
 
 ## Final validation (2026-10-23)
 

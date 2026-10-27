@@ -241,6 +241,24 @@ check('bridge-handshake', () => {
   return 'ready delivered to a youtube.com parent before learning, exact origin after, with the pre-fix negative arm';
 });
 
+// ---- 6c. YouTube resume (owner report 2026-10-26) ------------------------
+// resumeNativePagePlayer() started any paused <video>, and probe() runs on a
+// 20 s poll plus on every `playing` event, so on a YouTube watch page with
+// player=twitch the extension resumed a video the owner had paused himself.
+// This runs the real content.js against a stubbed YouTube page and asserts the
+// paused video is untouched by a probe; its pre-fix arm removes the ownership
+// guard and requires the detector to catch the resume.
+check('youtube-resume', () => {
+  const rel = 'kick-overlay/youtube-resume-test.cjs';
+  assert(existsSync(path.join(ROOT, rel)), `missing ${rel}`);
+  const r = spawnSync(process.execPath, [path.join(ROOT, rel)], {
+    cwd: path.join(ROOT, 'kick-overlay'),
+    encoding: 'utf8',
+  });
+  assert(r.status === 0, `${rel}: ${String(r.stderr || r.stdout || '').trim().slice(-320)}`);
+  return 'user-paused YouTube stays paused across probe(); a video we paused is still handed back (pre-fix arm goes RED)';
+});
+
 // ---- 7. bug ledger -------------------------------------------------------
 // States are explicit. `fixed` is allowed; `verified` needs an independent
 // verifier. The receipt always prints FIXED, NOT VERIFIED for fixed-but-

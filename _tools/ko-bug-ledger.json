@@ -102,6 +102,30 @@
       "verified_by": null,
       "owner_validation": "pending",
       "next": "Blocked on one Twitch-served ad that actually paints (it did on 2026-10-25 srdogg). When that happens, a cold open gives coverMs and revealMs directly; the ad-path code already logs `cold-cover` and `overlay-reveal` with ms relative to navigation."
+    },
+    {
+      "id": "KO-20261026-04",
+      "title": "Overlay un-pauses the owner's own YouTube video (probe resumed a player the user paused)",
+      "state": "fixed",
+      "author": "lane",
+      "reported": "2026-10-26",
+      "fixed_in": "unreleased (after 0.8.42)",
+      "commit": null,
+      "hypothesis": "resumeNativePagePlayer() guarded only on `v.paused`, never on whether this extension was the reason the video was paused. probe() calls it on the YouTube branch when KO.player === 'twitch', and probe() is driven by POLL_MS = 20000 (content.js:2444) plus a document `playing` listener, so a video the owner paused himself was started again on the next tick. The Twitch-page equivalent (player=twitch) had the same shape. Its sibling resumeTwitchIfOurs() (content.js:1242) already had the ownership guard (KO.twWasPlaying); resumeNativePagePlayer() had none.",
+      "falsifier": "A YouTube watch page whose <video> the user paused, with the overlay routed onto it and player=twitch, must still be paused after a probe cycle and play() must not be called.",
+      "evidence": [
+        "Pre-fix code, content.js:1254-1258: `const v = twitchVideo(); if (!v || !v.paused) return; v.play()`",
+        "Pre-fix code, call sites content.js:2026 (ext OFF, after teardown), 2033 (YouTube page, player=twitch), 2064 and 2078 (Twitch page)",
+        "Periodic trigger measured in source: content.js:2444 `KO.pollTimer = setInterval(() => { if (KO.enabled) fire(probe); }, POLL_MS)` with POLL_MS = 20000 at :44, plus the capture `playing` listener at :2456-2463",
+        "twitchVideo() (content.js:504) picks the largest visible <video> preferring `main.twitch-main, main`, which on youtube.com is the page's own player",
+        "Fix: resumeNativePagePlayer() now requires ownership (`KO.twWasPlaying`, or an explicit `ours` passed across teardown) before it touches the element; the two OFF branches carry the flag across teardown() because teardown clears it (content.js:1705)",
+        "kick-overlay/youtube-resume-test.cjs drives the real content.js through the real invoker (probe()) on a stubbed YouTube watch page: pre-fix arm RED (user-paused video resumed, play() called), real source GREEN (paused stays true, 0 play() calls, and a video WE paused is still handed back). Registered as gate check `youtube-resume`",
+        "Gate: node _tools/ko-verify.mjs -> RESULT PASS checks=14 failed=0"
+      ],
+      "verified": false,
+      "verified_by": null,
+      "owner_validation": "pending: the fix is in source only, not installed in his Chrome (no build/reload while he is gaming)",
+      "next": "Install the next build when the manager lifts the gaming freeze, then confirm the owner's paused YouTube stays paused. Not measurable against his live Chrome without a build."
     }
   ]
 }

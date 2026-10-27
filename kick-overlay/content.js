@@ -1246,14 +1246,21 @@ function resumeTwitchIfOurs() {
   if (v) v.play().catch(() => { /* autoplay policy */ });
 }
 
-// Explicit "show the page's own player" (player=twitch / overlay disabled).
-// resumeTwitchIfOurs() only restores a video we paused while it was playing;
-// on a fresh page the Twitch element is often still paused at ct=0, so the
-// old path handed back a frozen player. The user selected this player, so a
-// paused element should be started (autoplay policy still wins if it refuses).
-function resumeNativePagePlayer() {
+// Hand the page's own player back (player=twitch / overlay disabled).
+//
+// OWNERSHIP IS THE GUARD. This used to start any paused element, and probe()
+// runs on a 20 s poll plus on every `playing` event, so on a YouTube watch page
+// with player=twitch the extension resumed a video the user had paused himself
+// (owner report 2026-10-26: "something unpauses my YouTube by itself"). Only a
+// video THIS extension paused (KO.twWasPlaying, set by syncMute) is restarted.
+// The old "a paused element should be started" case is a user intent, and the
+// user intent lives in storage/popup, not in a periodic probe.
+function resumeNativePagePlayer(opts) {
+  const ours = opts && opts.ours !== undefined ? !!opts.ours : KO.twWasPlaying;
+  if (!ours) return;
   const v = twitchVideo();
   if (!v || !v.paused) return;
+  KO.twWasPlaying = false;
   try { v.play().catch(() => { /* autoplay policy */ }); } catch { /* detached */ }
 }
 
@@ -2022,8 +2029,11 @@ async function probe() {
     }
     if (!KO.enabled) {
       setBadge('OFF', '#6b7280');
+      // teardown() clears KO.twWasPlaying, so carry the ownership across it:
+      // turning the overlay off must still hand back a player we paused.
+      const ours = KO.twWasPlaying;
       teardown();
-      resumeNativePagePlayer();
+      resumeNativePagePlayer({ ours });
       return;
     }
     if (KO.player === 'twitch') {
@@ -2060,8 +2070,9 @@ async function probe() {
   }
   if (!KO.enabled) {
     setBadge('OFF', '#6b7280');
+    const ours = KO.twWasPlaying;
     teardown();
-    resumeNativePagePlayer();
+    resumeNativePagePlayer({ ours });
     return;
   }
   // NOTE (2026-08-13): no Twitch-live gate here anymore. It used to

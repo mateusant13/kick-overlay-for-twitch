@@ -59,6 +59,40 @@ Evidence:
   guest run). The ad trigger was synthetic; the messages and DOM effects are
   the shipped ones.
 
+### 0.8.43 evidence hardening (2026-10-27)
+
+The gate reported `FIXED, NOT VERIFIED` for KO-20261023-01 and KO-20261026-04
+while their negative arms existed only as prose. Both are now bound to a
+machine artifact:
+
+- Every gate run writes `_evidence/<bug>-arms.md` with the command, the
+  `sha256` of the source it exercised, the extracted RED/mutation lines and the
+  full captured output. New check `verified-artifacts` FAILS when a bug claims
+  an arm but the artifact is missing, older than 24 h, or has no RED line
+  (exercised: pointing the ledger at `_evidence/does-not-exist.md` turned the
+  gate RED at that check, rc=1).
+- The ledger gained a state narrower than `verified`: `arm-verified` = the
+  negative arm was executed and independently reviewed, the end-to-end
+  measurement that needs the owner's Chrome is still outstanding and is named
+  in `owner_validation`. The receipt prints `ARM-VERIFIED, LIVE PENDING` for it,
+  so the gap is loud instead of hidden, and `FIXED, NOT VERIFIED` keeps meaning
+  "no measured arm".
+- KO-20261026-04 is now `verified`: real Chrome, guest profile, live Twitch page
+  with the native video playing, user pause through Twitch's own pause button,
+  50 s across two probe ticks with `currentTime` frozen at 69.98, plus a
+  positive arm where the same probe resumes a video the extension owns.
+  `_evidence/KO-20261026-04-real-browser.txt`. Caveat kept: YouTube's own page
+  was blocked by its login/bot check, so the YouTube page stays unmeasured.
+- KO-20261023-01 is `arm-verified`, not `verified`. The independent reviewer
+  (consultgpt, ChatGPT) refused end-to-end verification twice: the fixture
+  executes the real worker and page module but never paints a real ad, and the
+  real-Chrome attempt returned NO-VERDICT because no `#ko-adfix` frame existed
+  (`_evidence/KO-20261023-01-real-browser-attempt.txt`, kept as evidence rather
+  than dropped). Upgrading it needs a painted ad on the owner's Chrome.
+- `NOT MEASURED` is now four items, each one requiring the owner's own Chrome:
+  the painted cold-preroll pod, the cold-cover branch in a real browser, the
+  YouTube page for KO-20261026-04, and watching the installed 0.8.43 live.
+
 ## 0.8.42 (2026-10-26) fix: the YouTube `player=kick` black box
 
 Not part of 0.8.39. Cause measured in 0.8.41, fix below, measured in the guest

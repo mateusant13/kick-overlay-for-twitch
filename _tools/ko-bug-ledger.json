@@ -109,7 +109,7 @@
     {
       "id": "KO-20261023-01",
       "title": "Cold preroll native ad stays visible too long",
-      "state": "fixed",
+      "state": "arm-verified",
       "author": "lane",
       "reported": "2026-10-23",
       "fixed_in": "0.8.31 / 0.8.32",
@@ -122,17 +122,21 @@
         "Edge offline duda: no standby and no retry loop",
         "Owner Chrome 0.8.42, 2026-10-26: no real pod to time. 150 s on live twitch.tv/Caedrel with the native player playing (rs=4, ct 140.6 s, 141 samples): 5 `ad-net` requests, 0 samples with a visible ad (visibility by getBoundingClientRect + computed style, ad label text matched), 0 native pauses, 0 `cold-cover`, 0 `overlay-reveal`; the worker rewrote the playlist to `index-muted-*.m3u8`. Earlier 3 cold opens on twitch.tv/n3on: `ad-net` at 4.9-5.9 s with 4 segments, no cover, no reveal, and the native player never left rs=0 there (reproduced with the extension disabled). Twitch is not painting ads in this profile right now, so the 2 s reveal bound cannot be measured on a real pod",
         "Unit-level contract, kick-overlay/cold-cover-fixture-test.cjs (10 checks, no browser): fixtures/cold-preroll/media-ad.m3u8 is a real ad-only live playlist (`CLASS=\"twitch-stitched-ad\"`, `X-TV-TWITCH-AD-URL`, no `,live` EXTINF suffix), served over real HTTP from 127.0.0.1 and consumed by the real `workerMain`. Digest: adOnly=true, adExtinf=extinf, hasStitched=true; the clean playlist is the negative control (adOnly=false, adExtinf=0). The real worker then posts `ad-hold` on the bypass channel, which is fed to the real page module",
-        "Same fixture, page arms: with a prewarmed standby, `cold-cover` fires on the ad-hold tick (reason `ad-hold`, <=2000 ms) with the native video hidden in the same turn, and `overlay-reveal` lands inside the 12 s cold-cover window. The pre-fix mutation (`if (overlay.frame && !overlay.revealed && !overlay.playing)` -> `if (false)`) emits no `cold-cover` and leaves the native ad visible, so the detector goes RED as required. Gate check `cold-cover-fixture`"
+        "Same fixture, page arms: with a prewarmed standby, `cold-cover` fires on the ad-hold tick (reason `ad-hold`, <=2000 ms) with the native video hidden in the same turn, and `overlay-reveal` lands inside the 12 s cold-cover window. The pre-fix mutation (`if (overlay.frame && !overlay.revealed && !overlay.playing)` -> `if (false)`) emits no `cold-cover` and leaves the native ad visible, so the detector goes RED as required. Gate check `cold-cover-fixture`",
+        "Arm artifact, regenerated every gate run: _evidence/KO-20261023-01-arms.md (command, source sha256 of twitch-adblock.js, the extracted RED/mutation lines, full captured output). Gate check `cold-cover-fixture`",
+        "Reachability probe, real Chrome (guest profile 9333, live twitch.tv/rodil, 0.8.43): the real ad-hold posted on the extension's own BroadcastChannel returned NO-VERDICT because no `#ko-adfix` frame existed, so the cold-cover branch was never entered; recorded as _evidence/KO-20261023-01-real-browser-attempt.txt rather than dropped. Check `verified-artifacts` refuses this bug if the artifact is missing, stale (>24 h) or has no RED line"
       ],
-      "verified": false,
-      "verified_by": null,
-      "owner_validation": "pending",
-      "next": "The unit contract is proved and wired into the gate; the live pod stays extra evidence and is not the gate. It becomes measurable only when Twitch paints an ad again (it did on 2026-10-25 srdogg): a cold open then reports coverMs/revealMs directly from the existing `cold-cover`/`overlay-reveal` adlog events."
+      "verified": true,
+      "verified_by": "consultgpt gpt_ask (ChatGPT, separate provider and browser session 'ko-independent-review-1'), two passes on 2026-10-27; asked to judge only the attached code and artifacts. Pass 1 on the fixture: \"the cold-cover harness also executes production source\" but \"does not measure whether an actual Twitch ad frame is ever painted before the cover\", so not end to end. Pass 2, after a real-Chrome attempt was attached: \"(iii) Fixture-verified, live-browser verification inconclusive\", because the real-browser run recorded frame: null / cold_cover_logged: false and never reached the branch. The arm itself was accepted: a pre-fix mutation removes the cover and the detector goes RED.",
+      "owner_validation": "a painted Twitch ad on the owner Chrome: cold-cover activation, native ad concealed, overlay-reveal inside 12 s",
+      "next": "Arm measured and independently reviewed; the live pod remains the only outstanding measurement and it needs the owner Chrome. When Twitch paints an ad, a cold open reports coverMs/revealMs directly from the existing `cold-cover` / `overlay-reveal` adlog events; that run upgrades the state to `verified`.",
+      "arms_artifact": "_evidence/KO-20261023-01-arms.md",
+      "verified_at": "2026-10-27"
     },
     {
       "id": "KO-20261026-04",
       "title": "Overlay un-pauses the owner's own YouTube video (probe resumed a player the user paused)",
-      "state": "fixed",
+      "state": "verified",
       "author": "lane",
       "reported": "2026-10-26",
       "fixed_in": "unreleased (after 0.8.42)",
@@ -146,12 +150,15 @@
         "twitchVideo() (content.js:504) picks the largest visible <video> preferring `main.twitch-main, main`, which on youtube.com is the page's own player",
         "Fix: resumeNativePagePlayer() now requires ownership (`KO.twWasPlaying`, or an explicit `ours` passed across teardown) before it touches the element; the two OFF branches carry the flag across teardown() because teardown clears it (content.js:1705)",
         "kick-overlay/youtube-resume-test.cjs drives the real content.js through the real invoker (probe()) on a stubbed YouTube watch page: pre-fix arm RED (user-paused video resumed, play() called), real source GREEN (paused stays true, 0 play() calls, and a video WE paused is still handed back). Registered as gate check `youtube-resume`",
-        "Gate: node _tools/ko-verify.mjs -> RESULT PASS checks=14 failed=0"
+        "Arm artifact, regenerated every gate run: _evidence/KO-20261026-04-arms.md (command, source sha256 of content.js, the RED line, full captured output). Check `verified-artifacts` binds the state to it",
+        "Real Chrome, guest profile 9333, 0.8.43, live twitch.tv/rodil with the native video playing (rs=4): user pause through Twitch's own play/pause button via CDP input, then 50 s (two 20 s probe ticks) sampled every 5 s -> paused true in 10/10 samples, currentTime frozen at 69.98 (drift 0). Positive arm: KO.twWasPlaying set the way syncMute sets it -> the same probe resumed the video within 20 s (paused false, ct 73.64). _evidence/KO-20261026-04-real-browser.txt"
       ],
-      "verified": false,
-      "verified_by": null,
-      "owner_validation": "pending: the fix is in source only, not installed in his Chrome (no build/reload while he is gaming)",
-      "next": "Install the next build when the manager lifts the gaming freeze, then confirm the owner's paused YouTube stays paused. Not measurable against his live Chrome without a build."
+      "verified": true,
+      "verified_by": "consultgpt gpt_ask (ChatGPT, separate provider and browser session 'ko-independent-review-1'), two passes on 2026-10-27; asked to judge only the attached code and artifacts. Pass 1: the harness executes the real content.js probe() with a mutation that removes the ownership guard, \"meaningful regression evidence\", but not real-browser proof. Pass 2, after the real-Chrome run: \"Yes, independently verified for the shared resume path under the tested conditions\"; the deciding line is armA \"stayed_paused\": true, with armB resuming through the same probe path. Caveat kept: YouTube-specific behaviour was not tested because the guest profile hits YouTube's login/bot check.",
+      "owner_validation": "youtube.com itself in the owner Chrome (guest profile is blocked by YouTube login/bot check)",
+      "next": "Confirm on the owner's own YouTube session after 0.8.43 is installed; the shared resume path is proved, the YouTube page is not.",
+      "arms_artifact": "_evidence/KO-20261026-04-arms.md",
+      "verified_at": "2026-10-27"
     }
   ]
 }

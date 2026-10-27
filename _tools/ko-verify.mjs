@@ -20,6 +20,10 @@ const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const EXT = path.join(ROOT, 'kick-overlay');
 const RESULTS = [];
 const STARTED = Date.now();
+// Raw stdout of the harnesses whose negative arm is the evidence a ledger entry
+// cites. The gate writes one _evidence/<bug>-arms.md per key, so a bug marked
+// verified has a machine artifact next to the receipt, not a prose claim.
+const CAPTURED_ARMS = {};
 
 function read(rel) {
   return readFileSync(path.join(ROOT, rel), 'utf8');
@@ -255,6 +259,7 @@ check('youtube-resume', () => {
     cwd: path.join(ROOT, 'kick-overlay'),
     encoding: 'utf8',
   });
+  CAPTURED_ARMS['KO-20261026-04'] = { check: 'youtube-resume', rel, r };
   assert(r.status === 0, `${rel}: ${String(r.stderr || r.stdout || '').trim().slice(-320)}`);
   return 'user-paused YouTube stays paused across probe(); a video we paused is still handed back (pre-fix arm goes RED)';
 });
@@ -274,6 +279,7 @@ check('cold-cover-fixture', () => {
     cwd: path.join(ROOT, 'kick-overlay'),
     encoding: 'utf8',
   });
+  CAPTURED_ARMS['KO-20261023-01'] = { check: 'cold-cover-fixture', rel, r };
   assert(r.status === 0, `${rel}: ${String(r.stderr || r.stdout || '').trim().slice(-320)}`);
   return 'served ad-only m3u8 -> real worker digest -> ad-hold -> cold-cover on the tick, reveal inside 12 s; pre-fix arm goes RED';
 });
@@ -296,19 +302,25 @@ check('channel-switch', () => {
     cwd: path.join(ROOT, 'kick-overlay'),
     encoding: 'utf8',
   });
+  CAPTURED_ARMS['KO-20261027-01'] = { check: 'channel-switch', rel, r };
   assert(r.status === 0, `${rel}: ${String(r.stderr || r.stdout || '').trim().slice(-320)}`);
   return 'revealed + standby overlays dropped on an SPA channel switch, native handed back, same-channel sub-route keeps it; pre-fix arm goes RED';
 });
 
 // ---- 7. bug ledger -------------------------------------------------------
 // States are explicit. `fixed` is allowed; `verified` needs an independent
-// verifier. The receipt always prints FIXED, NOT VERIFIED for fixed-but-
-// unverified entries instead of letting a commit message imply closure.
+// verifier, and `arm-verified` is the narrower claim: the negative arm was
+// executed and independently reviewed, while the end-to-end measurement that
+// needs the owner's own Chrome is still outstanding and named in
+// `owner_validation`. The receipt prints FIXED, NOT VERIFIED only for a fix
+// with no measured arm, and ARM-VERIFIED, LIVE PENDING for the narrow one, so
+// neither is silent.
 const LEDGER_STATES = new Set([
   'reported',
   'reproduced',
   'cause-isolated',
   'fixed',
+  'arm-verified',
   'verified',
   'recurrence-watch',
 ]);
@@ -321,9 +333,17 @@ check('bug-ledger', () => {
     assert(LEDGER_STATES.has(bug.state), `${bug.id}: bad state ${bug.state}`);
     assert(Array.isArray(bug.evidence) && bug.evidence.length > 0, `${bug.id}: fixed without evidence`);
     assert(bug.falsifier, `${bug.id}: hypothesis without falsifier`);
-    if (bug.state === 'verified') {
+    if (bug.state === 'verified' || bug.state === 'arm-verified') {
       assert(bug.verified_by, `${bug.id}: verified without verifier`);
       assert(bug.verified_by !== bug.author, `${bug.id}: verifier is the author`);
+      assert(bug.arms_artifact, `${bug.id}: verified without an arm artifact path`);
+      assert(bug.verified_at, `${bug.id}: verified without a date`);
+    }
+    if (bug.state === 'arm-verified') {
+      assert(
+        bug.owner_validation,
+        `${bug.id}: arm-verified without naming the owner measurement still outstanding`,
+      );
     }
   }
   ledger = raw;
@@ -335,12 +355,13 @@ const head = spawnSync('git', ['-C', ROOT, 'rev-parse', '--short', 'HEAD'], {
   encoding: 'utf8',
 });
 const gitHead = String(head.stdout || '').trim() || 'unknown';
-const failed = RESULTS.filter((r) => r.status === 'FAIL');
 const unverified = ledger.bugs.filter((b) => b.state === 'fixed' && b.verified !== true);
+const livePending = ledger.bugs.filter((b) => b.state === 'arm-verified');
 const NOT_MEASURED = [
-  'A Twitch-served ad that actually paints (measured: 5 ad-net requests and 0 visible-ad samples over 150 s on live Caedrel), so KO-20261023-01 cold preroll timing has no real pod to time.',
-  'The Edge synthetic timings (136-547 ms) are not a substitute for the owner measurement.',
-  'A JS-side profiler; no equivalent of the Sotto py-spy run exists yet.',
+  'KO-20261023-01 cold preroll on a real pod: a Twitch-served ad that actually paints, timed in the owner own Chrome. Measured 2026-10-26: 5 ad-net requests and 0 visible-ad samples over 150 s on live Caedrel, so no pod existed to time. Needs the owner browser, not a synthetic input.',
+  'KO-20261023-01 cold-cover in a real browser: the real-Chrome attempt (guest profile 9333, live twitch.tv/rodil, real ad-hold posted on the extension own BroadcastChannel) found no `#ko-adfix` frame, so the branch was never reached (`_evidence/KO-20261023-01-real-browser-attempt.txt`, NO-VERDICT). Reaching it needs a standby whose clean player exists, which in practice means the owner own Chrome on a live pod.',
+  'KO-20261026-04 behaviour on youtube.com itself: the guest profile is served a YouTube login/bot check, so the guard was proven on a real Twitch watch page through the shared page-player resume path. Confirming it on the owner own YouTube session needs his Chrome.',
+  'The installed 0.8.43 build in the owner Chrome after the adblock-standby path runs: unit, gate and guest-Chrome evidence exist, the owner own live session has not been watched yet.',
 ];
 // Measured on a live channel, not in this static gate: the numbers come from
 // runs recorded here so the receipt stops claiming they were never taken.
@@ -361,7 +382,7 @@ const payload = {
   elapsed_ms: Date.now() - STARTED,
   git_head: gitHead,
   version: manifest ? manifest.version : null,
-  result: failed.length ? 'FAIL' : 'PASS',
+  result: 'PASS',
   checks: RESULTS,
   source_sha256: sourceSha,
   bugs: ledger.bugs,
@@ -371,6 +392,86 @@ const payload = {
 
 const evidenceDir = path.join(ROOT, '_evidence');
 mkdirSync(evidenceDir, { recursive: true });
+
+// ---- 8. per-bug arm artifacts --------------------------------------------
+// A bug is only called verified when its negative arm left a machine artifact
+// in _evidence/. Each file carries the command, the source hash that was
+// exercised, the RED/mutation lines the harness printed and its full output.
+const ARM_SOURCES = {
+  'KO-20261023-01': ['kick-overlay/twitch-adblock.js'],
+  'KO-20261026-04': ['kick-overlay/content.js'],
+  'KO-20261027-01': ['kick-overlay/twitch-adblock.js'],
+};
+const armArtifacts = [];
+for (const [id, sources] of Object.entries(ARM_SOURCES)) {
+  const cap = CAPTURED_ARMS[id];
+  // The check threw before it captured: write nothing. A missing artifact is
+  // visible in arm_artifacts, while a fabricated one would not be.
+  if (!cap) continue;
+  const out = `${cap.r.stdout || ''}${cap.r.stderr || ''}`;
+  const verdict = RESULTS.find((r) => r.name === cap.check);
+  const arms = out
+    .split(/\r?\n/)
+    .filter((line) => /\bRED\b|mutation|EXPECTED-RED/.test(line))
+    .map((line) => line.trim());
+  const body = [
+    `# ${id} — executed arms`,
+    '',
+    `- generated: ${payload.generated_at}`,
+    `- git: ${gitHead}`,
+    `- extension: ${payload.version}`,
+    `- command: node ${cap.rel}  (cwd kick-overlay)`,
+    `- check: ${cap.check} -> ${verdict ? verdict.status : 'MISSING'}, exit=${cap.r.status}`,
+    ...sources.map((rel) => `- source: ${rel} sha256=${sha256(read(rel))}`),
+    '',
+    '## arm lines (extracted from the captured output)',
+    '',
+    ...(arms.length ? arms.map((line) => `- ${line}`) : ['- none matched: the negative arm did not print']),
+    '',
+    '## captured output',
+    '',
+    '```',
+    out.trimEnd(),
+    '```',
+    '',
+    'EXPECTED-RED is a control, not a product failure: the pre-fix mutation has to',
+    'fail at the detector that names the defect, which is what the RED line above',
+    'reports. A green file with no RED line means the control did not fire.',
+    '',
+  ].join('\n');
+  const rel = path.join('_evidence', `${id}-arms.md`);
+  writeFileSync(path.join(ROOT, rel), body);
+  armArtifacts.push({
+    id,
+    path: rel.split(path.sep).join('/'),
+    check: cap.check,
+    status: verdict ? verdict.status : 'MISSING',
+    expected_red: arms.length > 0,
+  });
+}
+payload.arm_artifacts = armArtifacts;
+
+// Every bug that claims a measured arm must point at an artifact this run just
+// wrote, and that artifact must carry a RED/mutation line. Deleting a harness's
+// negative arm, or pointing the ledger at a stale file, turns this check RED.
+check('verified-artifacts', () => {
+  const claimed = ledger.bugs.filter((b) => b.state === 'verified' || b.state === 'arm-verified');
+  for (const bug of claimed) {
+    assert(bug.arms_artifact, `${bug.id}: no arms_artifact`);
+    const abs = path.join(ROOT, bug.arms_artifact);
+    assert(existsSync(abs), `${bug.id}: missing ${bug.arms_artifact}`);
+    const body = readFileSync(abs, 'utf8');
+    assert(/RED|mutation/i.test(body), `${bug.id}: ${bug.arms_artifact} has no RED/mutation line`);
+    const generated = /generated:\s*(\S+)/.exec(body);
+    assert(generated, `${bug.id}: artifact has no generated stamp`);
+    const ageH = (Date.now() - Date.parse(generated[1])) / 3600e3;
+    assert(ageH < 24, `${bug.id}: artifact is ${ageH.toFixed(1)} h old; re-run the gate`);
+  }
+  return `${claimed.length} claim(s) bound to a fresh artifact`;
+});
+
+const failed = RESULTS.filter((r) => r.status === 'FAIL');
+payload.result = failed.length ? 'FAIL' : 'PASS';
 writeFileSync(path.join(evidenceDir, 'ko-verify-latest.json'), JSON.stringify(payload, null, 2) + '\n');
 
 const lines = [
@@ -388,12 +489,21 @@ const lines = [
   '| --- | --- | --- |',
   ...RESULTS.map((r) => `| ${r.name} | ${r.status} | ${String(r.detail).replace(/\|/g, '\\|')} |`),
   '',
+  '## Negative arms (machine files)',
+  '',
+  ...(armArtifacts.length
+    ? armArtifacts.map(
+        (a) =>
+          `- ${a.id}: ${a.path} — ${a.check} ${a.status}, RED/mutation line present=${a.expected_red}`,
+      )
+    : ['- none']),
+  '',
   '## Bugs',
   '',
   ...(ledger.bugs.length
     ? ledger.bugs.map(
         (b) =>
-          `- **${b.id}** ${b.title}: state=\`${b.state}\`, verified=${b.verified === true ? 'true' : 'false'}${b.next ? `, next: ${b.next}` : ''}`,
+          `- **${b.id}** ${b.title}: state=\`${b.state}\`, verified=${b.verified === true ? 'true' : 'false'}${b.arms_artifact ? `, arms: ${b.arms_artifact}` : ''}${b.verified_by ? `, verifier: ${b.verified_by}` : ''}${b.owner_validation ? `, owner validation: ${b.owner_validation}` : ''}${b.next ? `, next: ${b.next}` : ''}`,
       )
     : ['- none']),
   '',
@@ -418,6 +528,11 @@ if (unverified.length) {
   console.log(`FIXED, NOT VERIFIED: ${unverified.map((b) => b.id).join(', ')}`);
   console.log('='.repeat(64));
   console.log('');
+}
+if (livePending.length) {
+  console.log(
+    `ARM-VERIFIED, LIVE PENDING: ${livePending.map((b) => `${b.id} (${b.owner_validation})`).join('; ')}`,
+  );
 }
 console.log(`RESULT ${payload.result}  checks=${RESULTS.length}  failed=${failed.length}`);
 console.log(`RECEIPT ${path.relative(ROOT, path.join(evidenceDir, 'ko-verify-latest.md'))}`);

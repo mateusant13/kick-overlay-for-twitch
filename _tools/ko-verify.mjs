@@ -259,6 +259,25 @@ check('youtube-resume', () => {
   return 'user-paused YouTube stays paused across probe(); a video we paused is still handed back (pre-fix arm goes RED)';
 });
 
+// ---- 6d. cold-cover fixture (KO-20261023-01) ------------------------------
+// A live preroll cannot be manufactured: Twitch served 5 ad-net requests and
+// painted no ad in 150 s on live Caedrel (2026-10-26). This fixture manufactures
+// the INPUT instead — real m3u8 bytes with the stitched-ad markers, served over
+// real HTTP from 127.0.0.1 — then runs the real worker over them and feeds the
+// resulting ad-hold into the real page module. GREEN: cold-cover on the hold
+// tick, native hidden, reveal inside the 12 s bound. RED: the pre-fix mutation
+// (no cold cover) leaves the native ad visible, which the detector must catch.
+check('cold-cover-fixture', () => {
+  const rel = 'kick-overlay/cold-cover-fixture-test.cjs';
+  assert(existsSync(path.join(ROOT, rel)), `missing ${rel}`);
+  const r = spawnSync(process.execPath, [path.join(ROOT, rel)], {
+    cwd: path.join(ROOT, 'kick-overlay'),
+    encoding: 'utf8',
+  });
+  assert(r.status === 0, `${rel}: ${String(r.stderr || r.stdout || '').trim().slice(-320)}`);
+  return 'served ad-only m3u8 -> real worker digest -> ad-hold -> cold-cover on the tick, reveal inside 12 s; pre-fix arm goes RED';
+});
+
 // ---- 7. bug ledger -------------------------------------------------------
 // States are explicit. `fixed` is allowed; `verified` needs an independent
 // verifier. The receipt always prints FIXED, NOT VERIFIED for fixed-but-

@@ -1,0 +1,11 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-MEDIA-SEQUENCE:9000
+#EXTINF:2.000,live
+https://video-edge-a.playlist.ttvnw.net/v1/segment/9000.ts
+#EXTINF:2.000,live
+https://video-edge-a.playlist.ttvnw.net/v1/segment/9001.ts
+#EXTINF:2.000,live
+https://video-edge-a.playlist.ttvnw.net/v1/segment/9002.ts
+#EXT-X-TWITCH-PREFETCH:https://video-edge-a.playlist.ttvnw.net/v1/segment/9003.ts

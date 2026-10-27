@@ -1,0 +1,17 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-MEDIA-SEQUENCE:4200
+#EXT-X-DISCONTINUITY-SEQUENCE:0
+#EXT-X-DATERANGE:ID="twitch-stitched-ad-2001",CLASS="twitch-stitched-ad",START-DATE="2026-10-27T00:00:00.000Z",DURATION=4.000,X-TV-TWITCH-AD-URL="https://ads.example/creative/2001"
+#EXT-X-TWITCH-PREFETCH:https://video-edge-a.playlist.ttvnw.net/v1/segment/4200.ts
+#EXTINF:2.000,
+https://video-edge-a.playlist.ttvnw.net/v1/segment/4200.ts
+#EXTINF:2.000,
+https://video-edge-a.playlist.ttvnw.net/v1/segment/4201.ts
+#EXT-X-DATERANGE:ID="twitch-stitched-ad-2003",CLASS="twitch-stitched-ad",START-DATE="2026-10-27T00:00:04.000Z",DURATION=4.000,X-TV-TWITCH-AD-URL="https://ads.example/creative/2003"
+#EXT-X-TWITCH-PREFETCH:https://video-edge-a.playlist.ttvnw.net/v1/segment/4202.ts
+#EXTINF:2.000,
+https://video-edge-a.playlist.ttvnw.net/v1/segment/4202.ts
+#EXTINF:2.000,
+https://video-edge-a.playlist.ttvnw.net/v1/segment/4203.ts

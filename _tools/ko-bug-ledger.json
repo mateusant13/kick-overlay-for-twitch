@@ -2,6 +2,30 @@
   "schema": 1,
   "bugs": [
     {
+      "id": "KO-20261027-01",
+      "title": "The stream keeps the previous channel after an SPA channel switch (revealed clean player is never stopped)",
+      "state": "fixed",
+      "author": "lane",
+      "reported": "2026-10-27",
+      "fixed_in": "0.8.43",
+      "commit": null,
+      "hypothesis": "Twitch changes channels with an SPA navigation: same document, same content-script instance, new location.pathname. The ad-free clean player is an overlay owned by that instance. The only channel checks in twitch-adblock.js were inside ad-hold/standby-start and they only applied while the overlay was an invisible STANDBY (`if (!overlay.standby) return` / `overlay.standby ? stop : cold path`). An overlay that was already revealed (a live ad pod) had no channel check and nothing in the module watched the route (no popstate/pushState/pathname poll), so after a switch the previous channel clean player stayed on screen, the native player stayed visibility:hidden/muted, and the next ad on the new channel also hit the early `overlay.frame && !overlay.standby` return. The user sees the previous streamer image and calls it \"keeps the last stream\".",
+      "falsifier": "With a revealed clean player on channel A, changing location.pathname to channel B (the way Twitch does, no reload) must remove the A player and hand the native B player back instead of keeping the A stream attached.",
+      "evidence": [
+        "Pre-fix code, kick-overlay/twitch-adblock.js: ad-hold `if (overlay.frame && !overlay.standby) { ... return; }` had no channel comparison, and standby-start compared `overlay.channel` with `pageChannel()` only for a standby",
+        "Pre-fix code, same module: no route watcher at all (grep popstate|pushState|setInterval|pathname found only pageChannel() and the document_start standby requests)",
+        "kick-overlay/channel-switch-test.cjs runs the REAL twitch-adblock.js against the shared stubbed DOM (mute-decision-test.cjs), drives ad-hold -> ad-start -> ready -> 3 healthy Playing ticks to a revealed overlay, then changes location.pathname like Twitch does. Pre-fix run (source before the fix), recorded output: `FAIL a revealed overlay of the previous channel is stopped on a channel switch`, `FAIL the native player is handed back after the switch  native still hidden (hidden)`, `FAIL an ad on the new channel cold-starts its own clean player  loads after the switch: [\"https://clean.example/live.m3u8\"]` — RESULT FAIL checks=9 failed=6",
+        "Fix (0.8.43): a 900 ms pathname watcher in the page module (same cadence as content.js SPA_MS). On a channel change it stops any overlay whose overlay.channel no longer matches pageChannel(); stopAdOverlay() restores the hidden videos, resumes the native player and posts overlay-stop so the worker clears adBypassActive and can retry on the new channel. Same-channel sub-routes (/ch/clips) do not trigger it",
+        "Post-fix: node kick-overlay/channel-switch-test.cjs -> RESULT PASS channel-switch checks=9 failed=0 (revealed dropped, native handed back, new ad cold-starts on the new channel, standby dropped, sub-route keeps the overlay, negative arm with the guard disabled still keeps the old player and native hidden)",
+        "Live arm, guest Chrome (port 9333), real module driven through its own BroadcastChannel protocol with a real minted clean master for twitch.tv/necros: standby-start -> Standby 0.01 / native visible, ad-hold -> overlay-reveal reason standby, adfix opacity 1, native visibility:hidden muted:true. Real click on the sidebar link to /aggeo (SPA): at the first 500 ms sample the A player was removed (adfix null), native visibility restored to visible and playing (ct 0 -> 3.6 s), and the new channel standby started at T+1s",
+        "Version 0.8.43; gate check `channel-switch` added to _tools/ko-verify.mjs"
+      ],
+      "verified": true,
+      "verified_by": "lane, pre-fix RED + post-fix PASS through the real module (unit), plus a guest-Chrome SPA switch on live twitch.tv/necros -> /aggeo with a synthetic ad trigger through the shipped message protocol",
+      "owner_validation": "pending: installed build 0.8.43 in his Chrome. Watch a channel during a pod, switch channels, confirm the new channel image appears instead of the previous streamer",
+      "next": "Owner: with 0.8.43 installed, switch channels while an ad/clean overlay is up and confirm the picture changes. Live limb not yet measured on a real pod (no ad painted in the guest during this run)."
+    },
+    {
       "id": "KO-20261026-03",
       "title": "Ad player swap unmutes a user who had muted (ignores the last mute decision)",
       "state": "fixed",

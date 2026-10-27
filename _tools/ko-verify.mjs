@@ -278,6 +278,28 @@ check('cold-cover-fixture', () => {
   return 'served ad-only m3u8 -> real worker digest -> ad-hold -> cold-cover on the tick, reveal inside 12 s; pre-fix arm goes RED';
 });
 
+// ---- 6e. SPA channel switch (owner report 2026-10-27) ---------------------
+// Twitch changes channels without reloading the page. The clean-player overlay
+// lives in the same document, and only its invisible STANDBY was guarded
+// against a stale channel; a revealed overlay (a live pod) had no path back, so
+// after a switch the previous channel's stream stayed on screen with the native
+// player hidden ("it keeps the last stream"). This runs the real
+// twitch-adblock.js through the real ad path to a revealed overlay, moves the
+// pathname the way Twitch does, and asserts the previous channel's player is
+// removed, the native is handed back and the next ad cold-starts on the new
+// channel; its negative arm disables the guard and requires the detector to
+// catch the leak (pre-fix arm goes RED).
+check('channel-switch', () => {
+  const rel = 'kick-overlay/channel-switch-test.cjs';
+  assert(existsSync(path.join(ROOT, rel)), `missing ${rel}`);
+  const r = spawnSync(process.execPath, [path.join(ROOT, rel)], {
+    cwd: path.join(ROOT, 'kick-overlay'),
+    encoding: 'utf8',
+  });
+  assert(r.status === 0, `${rel}: ${String(r.stderr || r.stdout || '').trim().slice(-320)}`);
+  return 'revealed + standby overlays dropped on an SPA channel switch, native handed back, same-channel sub-route keeps it; pre-fix arm goes RED';
+});
+
 // ---- 7. bug ledger -------------------------------------------------------
 // States are explicit. `fixed` is allowed; `verified` needs an independent
 // verifier. The receipt always prints FIXED, NOT VERIFIED for fixed-but-

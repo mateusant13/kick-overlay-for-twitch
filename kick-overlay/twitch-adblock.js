@@ -1570,6 +1570,28 @@
     setTimeout(() => requestStandby(0), 5000);
   }
 
+  // SPA channel switch (owner report 2026-10-27: "it keeps the last stream").
+  // Twitch changes channels without reloading the page, so this module keeps
+  // running with the previous channel's clean player. The channel checks in
+  // ad-hold/standby-start only cover an invisible STANDBY; an overlay that is
+  // already revealed (a live pod) had no path back, so after a switch it kept
+  // streaming the old channel and kept the native player hidden. Watch the
+  // pathname directly — the same signal content.js uses (SPA_MS) — and hand
+  // the new channel's native player back. stopAdOverlay() restores the hidden
+  // videos, resumes the native player and posts overlay-stop so the worker
+  // clears its ad state and can retry on the new channel.
+  let routeChannel = pageChannel();
+  setInterval(() => {
+    const ch = pageChannel();
+    if (ch === routeChannel) return;
+    routeChannel = ch;
+    const oc = String(overlay.channel || '').toLowerCase();
+    if (overlay.frame && oc !== ch) {
+      adLog('channel-change', { from: oc || null, to: ch || null, standby: !!overlay.standby, revealed: !!overlay.revealed });
+      stopAdOverlay('channel-change');
+    }
+  }, 900);
+
   // The ISOLATED bridge (adblock-bridge.js) mirrors the user's toggle into
   // this attribute at document_start. Absent attribute = default ON.
   const isOn = () => {

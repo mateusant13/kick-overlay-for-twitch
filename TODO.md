@@ -1,6 +1,8 @@
 # TODO - Kick & YouTube Overlay for Twitch
 
-**Status:** Version **0.8.42** fixes the black box over a YouTube watch page with
+**Status:** Version **0.8.43** stops the ad-free clean player from keeping the
+previous channel after an SPA channel switch. Version **0.8.42** fixes the
+black box over a YouTube watch page with
 `player=kick`: the IVS frame posted `ready` to the hardcoded
 `https://www.twitch.tv` origin, which the browser drops on a youtube.com page, so
 the handshake never started and the layer covered the video while the player sat
@@ -18,6 +20,44 @@ validation of 0.8.39 is with the manager.
 The detailed evidence for every fix is in
 `kick-overlay/ADBLOCK-FINDINGS.md`. Older revisions of this TODO, including the
 investigations that led to 0.8.8-0.8.29, remain in the git history.
+
+## 0.8.43 (2026-10-27) fix: the stream kept the previous channel
+
+Owner report: "make the stream actually change when i change channels, cause
+today is keeps the last stream."
+
+Twitch changes channels with an SPA navigation: same document, same script
+instance, new `location.pathname`. The ad-free clean player is an overlay owned
+by that instance. Its only channel checks lived in `ad-hold`/`standby-start`
+and applied **only to an invisible standby**; a revealed overlay (a live ad
+pod) had no channel check, and nothing in the module watched the route. After a
+switch the previous channel's clean player stayed on screen, the native player
+stayed `visibility:hidden`/muted, and the next ad on the new channel hit the
+`overlay.frame && !overlay.standby` early return.
+
+Fix: a 900 ms pathname watcher (the same cadence `content.js` uses for
+`SPA_MS`). When the route channel differs from `overlay.channel`,
+`stopAdOverlay('channel-change')` removes the player, restores the hidden
+videos, resumes the native player and posts `overlay-stop` so the worker clears
+its ad state and can retry on the new channel. A sub-route of the same channel
+(`/ch/clips`) does not trigger it.
+
+Evidence:
+
+- `kick-overlay/channel-switch-test.cjs` runs the real `twitch-adblock.js`
+  through the real ad path to a revealed overlay, then moves the pathname the
+  way Twitch does. Pre-fix the old player stayed attached and the native stayed
+  hidden (RED, captured before the fix); after the fix 9/9 PASS, and the
+  negative arm (guard disabled) still keeps the old player, so the detector is
+  exercised in both directions. Gate check `channel-switch`.
+- Guest Chrome, real module driven through its own BroadcastChannel protocol
+  with a real minted clean master on live `/necros`: standby -> `ad-hold` ->
+  `overlay-reveal` (opacity 1, native hidden). A real click to `/aggeo` removed
+  the old player within the first 500 ms sample, restored the native (visible,
+  playing 0 -> 3.6 s) and started the new channel's standby.
+- Not measured: a real Twitch ad pod during the switch (none painted in the
+  guest run). The ad trigger was synthetic; the messages and DOM effects are
+  the shipped ones.
 
 ## 0.8.42 (2026-10-26) fix: the YouTube `player=kick` black box
 

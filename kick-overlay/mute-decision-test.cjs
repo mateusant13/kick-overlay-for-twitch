@@ -170,6 +170,7 @@ function makePage(source = SOURCE) {
   const api = {
     sent,
     video,
+    location,
     get frame() { return createdFrame; },
     get badge() { return createdBadge; },
     document,

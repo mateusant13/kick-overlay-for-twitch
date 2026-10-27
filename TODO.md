@@ -118,6 +118,20 @@ iframe so the standby cannot play) died on a CDP session that no longer existed,
 so it produced no PASS and is not shipped; the attempt and its failure are
 recorded in the ledger's `reachability_note`.
 
+### Staleness binding (2026-10-27, third pass)
+
+A reachability record from before the source changed proved nothing about the
+code that shipped afterwards, and the gate only printed its age. The record must
+now be newer than the last commit touching a source file named in the bug's arm
+artifact; otherwise `verified-artifacts` fails and names both the commit time and
+the command to re-run. Mutation exercised: backdating
+`_evidence/KO-20261026-04-reachability.txt` to 2026-10-01 turns the gate RED
+("is older than the last change to kick-overlay/content.js
+(2026-10-27T13:11:18.000Z); re-run node _tools/ko-real-arm-d2.mjs"), and it goes
+green again when the record is refreshed. Consequence, intended: any edit to
+`twitch-adblock.js` or `content.js` retires both claims until the browser arms
+are re-run.
+
 ## 0.8.42 (2026-10-26) fix: the YouTube `player=kick` black box
 
 Not part of 0.8.39. Cause measured in 0.8.41, fix below, measured in the guest

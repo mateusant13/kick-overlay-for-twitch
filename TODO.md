@@ -93,6 +93,31 @@ machine artifact:
   the painted cold-preroll pod, the cold-cover branch in a real browser, the
   YouTube page for KO-20261026-04, and watching the installed 0.8.43 live.
 
+### Reachability binding (2026-10-27, second pass)
+
+The first pass could not tell "the arm executed" from "the arm is reachable in
+production". Two invariants close that:
+
+- `verified` and `arm-verified` both require a reachability record from a real
+  browser run: `node _tools/ko-real-arm-d1.mjs` / `ko-real-arm-d2.mjs` against
+  the guest harness. The scripts live in `_tools/`, not in a temp folder, so the
+  record can be re-derived instead of trusted.
+- `verified` requires that record to say `RESULT PASS`; `arm-verified` requires
+  `RESULT NO-VERDICT`. The weaker state is earned by a failed reachability
+  attempt, not chosen because the stronger one was inconvenient.
+
+Three mutations, each RED at the intended check and message: `arm-verified` set
+to `verified` with a NO-VERDICT record -> `bug-ledger` ("state verified
+contradicts reachability verdict NO-VERDICT"); the record switched to PASS while
+the artifact says NO-VERDICT -> `bug-ledger`; the artifact text edited to PASS
+while the ledger says NO-VERDICT -> `verified-artifacts` ("does not say RESULT
+NO-VERDICT").
+
+D1's second reachability design (blocking the clean source inside the overlay
+iframe so the standby cannot play) died on a CDP session that no longer existed,
+so it produced no PASS and is not shipped; the attempt and its failure are
+recorded in the ledger's `reachability_note`.
+
 ## 0.8.42 (2026-10-26) fix: the YouTube `player=kick` black box
 
 Not part of 0.8.39. Cause measured in 0.8.41, fix below, measured in the guest

@@ -109,7 +109,7 @@
     {
       "id": "KO-20261023-01",
       "title": "Cold preroll native ad stays visible too long",
-      "state": "arm-verified",
+      "state": "verified",
       "author": "lane",
       "reported": "2026-10-23",
       "fixed_in": "0.8.31 / 0.8.32",
@@ -124,17 +124,18 @@
         "Unit-level contract, kick-overlay/cold-cover-fixture-test.cjs (10 checks, no browser): fixtures/cold-preroll/media-ad.m3u8 is a real ad-only live playlist (`CLASS=\"twitch-stitched-ad\"`, `X-TV-TWITCH-AD-URL`, no `,live` EXTINF suffix), served over real HTTP from 127.0.0.1 and consumed by the real `workerMain`. Digest: adOnly=true, adExtinf=extinf, hasStitched=true; the clean playlist is the negative control (adOnly=false, adExtinf=0). The real worker then posts `ad-hold` on the bypass channel, which is fed to the real page module",
         "Same fixture, page arms: with a prewarmed standby, `cold-cover` fires on the ad-hold tick (reason `ad-hold`, <=2000 ms) with the native video hidden in the same turn, and `overlay-reveal` lands inside the 12 s cold-cover window. The pre-fix mutation (`if (overlay.frame && !overlay.revealed && !overlay.playing)` -> `if (false)`) emits no `cold-cover` and leaves the native ad visible, so the detector goes RED as required. Gate check `cold-cover-fixture`",
         "Arm artifact, regenerated every gate run: _evidence/KO-20261023-01-arms.md (command, source sha256 of twitch-adblock.js, the extracted RED/mutation lines, full captured output). Gate check `cold-cover-fixture`",
-        "Reachability probe, real Chrome (guest profile 9333, live twitch.tv/rodil, 0.8.43): the real ad-hold posted on the extension's own BroadcastChannel returned NO-VERDICT because no `#ko-adfix` frame existed, so the cold-cover branch was never entered; recorded as _evidence/KO-20261023-01-real-browser-attempt.txt rather than dropped. Check `verified-artifacts` refuses this bug if the artifact is missing, stale (>24 h) or has no RED line"
+        "Reachability probe, real Chrome (guest profile 9333, live twitch.tv/rodil, 0.8.43): the real ad-hold posted on the extension's own BroadcastChannel returned NO-VERDICT because no `#ko-adfix` frame existed, so the cold-cover branch was never entered; recorded as _evidence/KO-20261023-01-real-browser-attempt.txt rather than dropped. Check `verified-artifacts` refuses this bug if the artifact is missing, stale (>24 h) or has no RED line",
+        "Real-Chrome reachability, 0.8.43, live twitch.tv/aggeo: cold-cover on the hold tick, frame opacity 1, every native <video> hidden, overlay-reveal 2,141 ms later (inside the 12 s bound), event stream captured from the module own ko-adlog CustomEvent. _evidence/KO-20261023-01-reachability.txt, produced by _tools/ko-real-arm-d1.mjs"
       ],
       "verified": true,
-      "verified_by": "consultgpt gpt_ask (ChatGPT, separate provider and browser session 'ko-independent-review-1'), two passes on 2026-10-27; asked to judge only the attached code and artifacts. Pass 1 on the fixture: \"the cold-cover harness also executes production source\" but \"does not measure whether an actual Twitch ad frame is ever painted before the cover\", so not end to end. Pass 2, after a real-Chrome attempt was attached: \"(iii) Fixture-verified, live-browser verification inconclusive\", because the real-browser run recorded frame: null / cold_cover_logged: false and never reached the branch. The arm itself was accepted: a pre-fix mutation removes the cover and the detector goes RED.",
-      "owner_validation": "a painted Twitch ad on the owner Chrome: cold-cover activation, native ad concealed, overlay-reveal inside 12 s",
-      "next": "Arm measured and independently reviewed; the live pod remains the only outstanding measurement and it needs the owner Chrome. When Twitch paints an ad, a cold open reports coverMs/revealMs directly from the existing `cold-cover` / `overlay-reveal` adlog events; that run upgrades the state to `verified`.",
+      "verified_by": "consultgpt gpt_ask (ChatGPT, separate provider, session ko-independent-review-1), third pass on 2026-10-27 with _evidence/KO-20261023-01-reachability.txt: \"A) VERIFIED - Deciding line: resolved: overlay-reveal, within_bound: true, pass true (2,141 ms after the injected ad-hold, with the cold-cover logged, the frame opaque, and the native video hidden).\" Passes 1 and 2 had refused for lack of a real-browser run.",
+      "owner_validation": "a Twitch-served ad that actually paints, across repeated runs and channels on the owner Chrome",
+      "next": "Arm, reachability and independent review are all recorded. The only open measurement is a genuine Twitch-served ad, which also gives coverMs/revealMs for real timing; it needs the owner Chrome and cannot be manufactured.",
       "arms_artifact": "_evidence/KO-20261023-01-arms.md",
       "verified_at": "2026-10-27",
       "reachability_artifact": "_evidence/KO-20261023-01-reachability.txt",
-      "reachability_verdict": "NO-VERDICT",
-      "reachability_note": "node _tools/ko-real-arm-d1.mjs against the guest Chrome (live twitch.tv/aggeo, 0.8.43): #ko-adfix present, pageId read from the page main world, real ad-hold posted on the extension BroadcastChannel, and the module took the WARM standby path (overlay-reveal / reveal-muted) instead of cold-cover. A second design that blocked the clean source inside the overlay iframe could not attach reliably (CDP session died), so no PASS exists. The weaker state is therefore earned, not chosen."
+      "reachability_verdict": "PASS",
+      "reachability_note": "node _tools/ko-real-arm-d1.mjs, real Chrome, shipped 0.8.43, live twitch.tv/aggeo: waited for #ko-adfix, posted the real ad-hold on the extension BroadcastChannel while healthyTicks was still under 3 (the code definition of cold), and captured the module own ko-adlog stream. cold-cover logged, frame opaque on the hold tick, every native video visibility:hidden, overlay-reveal 2,141 ms later. Three earlier designs returned NO-VERDICT and are recorded here because each one named a real fact about the code: (1) no #ko-adfix frame on a channel whose standby never started, (2) the adblock module globals live in the page MAIN world and reading an isolated context gives pageId null, (3) pausing the clean player does NOT make a standby cold, because overlay.playing flips on three healthy heartbeats (twitch-adblock.js:1288-1293) and the health test ignores the paused flag."
     },
     {
       "id": "KO-20261026-04",

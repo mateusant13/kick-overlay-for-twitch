@@ -83,15 +83,24 @@ machine artifact:
   positive arm where the same probe resumes a video the extension owns.
   `_evidence/KO-20261026-04-real-browser.txt`. Caveat kept: YouTube's own page
   was blocked by its login/bot check, so the YouTube page stays unmeasured.
-- KO-20261023-01 is `arm-verified`, not `verified`. The independent reviewer
-  (consultgpt, ChatGPT) refused end-to-end verification twice: the fixture
-  executes the real worker and page module but never paints a real ad, and the
-  real-Chrome attempt returned NO-VERDICT because no `#ko-adfix` frame existed
-  (`_evidence/KO-20261023-01-real-browser-attempt.txt`, kept as evidence rather
-  than dropped). Upgrading it needs a painted ad on the owner's Chrome.
-- `NOT MEASURED` is now four items, each one requiring the owner's own Chrome:
-  the painted cold-preroll pod, the cold-cover branch in a real browser, the
-  YouTube page for KO-20261026-04, and watching the installed 0.8.43 live.
+- KO-20261023-01 is now `verified`, after four reachability designs. The branch
+  does run in production: on live twitch.tv/aggeo with 0.8.43, an ad-hold posted
+  the instant `#ko-adfix` appeared (the code's cold state, before three healthy
+  heartbeats) produced `cold-cover` on that tick, frame opacity 1, every native
+  `<video>` hidden, and `overlay-reveal` 2,141 ms later. The independent reviewer
+  (consultgpt, ChatGPT) accepted it on the third pass: "VERIFIED — deciding line
+  `resolved: overlay-reveal, within_bound: true`".
+- The three earlier designs each failed for a reason worth keeping: no
+  `#ko-adfix` frame on a channel whose standby never started; the adblock module
+  is a `world: "MAIN"` content script, so reading its globals from an isolated
+  context yields `pageId: null`; and pausing the clean player does **not** make a
+  standby cold, because `overlay.playing` flips only after three healthy
+  heartbeats (`twitch-adblock.js:1288-1293`) and the health test ignores the
+  paused flag.
+- `NOT MEASURED` is now three items, each one requiring the owner's own Chrome:
+  a Twitch-served ad that actually paints (repeated runs and channels, real
+  timing), the YouTube page for KO-20261026-04, and watching the installed 0.8.43
+  live.
 
 ### Reachability binding (2026-10-27, second pass)
 

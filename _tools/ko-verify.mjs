@@ -369,10 +369,9 @@ const gitHead = String(head.stdout || '').trim() || 'unknown';
 const unverified = ledger.bugs.filter((b) => b.state === 'fixed' && b.verified !== true);
 const livePending = ledger.bugs.filter((b) => b.state === 'arm-verified');
 const NOT_MEASURED = [
-  'KO-20261023-01 cold preroll on a real pod: a Twitch-served ad that actually paints, timed in the owner own Chrome. Measured 2026-10-26: 5 ad-net requests and 0 visible-ad samples over 150 s on live Caedrel, so no pod existed to time. Needs the owner browser, not a synthetic input.',
-  'KO-20261023-01 cold-cover in a real browser: the real-Chrome attempt (guest profile 9333, live twitch.tv/rodil, real ad-hold posted on the extension own BroadcastChannel) found no `#ko-adfix` frame, so the branch was never reached (`_evidence/KO-20261023-01-real-browser-attempt.txt`, NO-VERDICT). Reaching it needs a standby whose clean player exists, which in practice means the owner own Chrome on a live pod.',
+  'A Twitch-served ad that actually paints, on the owner own Chrome, across repeated runs and channels: the only way to time a real cold preroll and to confirm the cover against production timing. Measured 2026-10-26: 5 ad-net requests and 0 visible-ad samples over 150 s on live Caedrel, so no pod existed to time. The cold-cover branch itself is measured in a real browser with an injected ad-hold (_evidence/KO-20261023-01-reachability.txt); that is a different claim from a real pod.',
   'KO-20261026-04 behaviour on youtube.com itself: the guest profile is served a YouTube login/bot check, so the guard was proven on a real Twitch watch page through the shared page-player resume path. Confirming it on the owner own YouTube session needs his Chrome.',
-  'The installed 0.8.43 build in the owner Chrome after the adblock-standby path runs: unit, gate and guest-Chrome evidence exist, the owner own live session has not been watched yet.',
+  'The installed 0.8.43 build in the owner Chrome while he watches: unit, gate and guest-Chrome evidence exist, the owner own live session has not been observed yet.',
 ];
 // Measured on a live channel, not in this static gate: the numbers come from
 // runs recorded here so the receipt stops claiming they were never taken.
